@@ -1,0 +1,31 @@
+# Core dependencies for VRP experiment pipeline
+# Python 3.11+ recommended
+
+# MCP (Model Context Protocol) client for accessing Routing MCP Server tools
+mcp>=0.1.0
+
+# Type hints support (for Python < 3.11, though 3.11+ has TypedDict built-in)
+typing-extensions>=4.5.0
+
+# Data validation and serialization
+pydantic>=2.0.0
+
+# HTTP client for API calls (if needed for direct API access)
+requests>=2.31.0
+
+# JSON handling (built-in, but listed for completeness)
+# json - built-in module
+
+# Testing framework
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# Code quality
+black>=23.7.0
+flake8>=6.1.0
+mypy>=1.5.0
+
+# Visualization
+matplotlib>=3.7.0
+numpy>=1.24.0
+

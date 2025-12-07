@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project outputs
+outputs/
+*.json
+*.csv
+!requirements.txt
+!package.json
+!tsconfig.json
+!mcp.json
+
+# OSRM data (large files)
+osrm-data/*.osm.pbf
+osrm-data/*.osrm
+osrm-data/*.osrm.*
+
+# Node modules
+node_modules/
+mcp-vroom/node_modules/
+mcp-vroom/dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+script.txt

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "vroom-vrp": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "cwd": "/Users/isomin/HSS437/mcp-vroom",
+      "env": {
+        "VROOM_BASE_URL": "http://localhost:3000/"
+      }
+    }
+  }
+}
+
