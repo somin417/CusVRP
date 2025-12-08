@@ -255,19 +255,14 @@ class iNaviCache:
         Returns:
             Dictionary with 'distance', 'duration', and optionally 'polyline' or 'geometry'
         """
-        try:
-            # Try to call MCP tool using the MCP client
-            return self._call_mcp_tool_sync(lat1, lon1, lat2, lon2)
-        except Exception as e:
-            # Fallback to haversine if MCP call fails
-            logger.warning(f"iNavi MCP tool call failed: {e}, using haversine fallback")
-            distance, duration = haversine_distance(lat1, lon1, lat2, lon2)
-            return {
-                "distance": distance,
-                "duration": duration,
-                "polyline": None,
-                "geometry": None
-            }
+        # iNavi API disabled - always use haversine distance
+        distance, duration = haversine_distance(lat1, lon1, lat2, lon2)
+        return {
+            "distance": distance,
+            "duration": duration,
+            "polyline": None,
+            "geometry": None
+        }
     
     def _call_mcp_tool_sync(
         self,
@@ -345,12 +340,9 @@ class iNaviCache:
                 pass
             
             if not mcp_server_command:
-                # If no server command is configured, try to use a default
-                # This assumes the MCP server is available in PATH or configured elsewhere
-                raise RuntimeError(
-                    "MCP server not configured. "
-                    "Set MCP_SERVER_COMMAND environment variable or ensure MCP tools are available."
-                )
+                # If no server command is configured, silently fall back to haversine
+                # MCP server is optional - haversine fallback is acceptable
+                raise RuntimeError("MCP server not configured")
             
             # Configure MCP server connection
             from mcp.client.stdio import stdio_client
@@ -553,20 +545,50 @@ class PolylineCache:
         """Load cache from file."""
         if os.path.exists(self.cache_file):
             try:
-                with open(self.cache_file, 'r') as f:
-                    self.cache = json.load(f)
+                # Try to read the file with a small retry for concurrent access
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        with open(self.cache_file, 'r') as f:
+                            self.cache = json.load(f)
+                        # Success - exit retry loop
+                        break
+                    except (json.JSONDecodeError, IOError) as e:
+                        if attempt == max_retries - 1:
+                            # Last attempt failed - log at debug level (not warning)
+                            # This is often due to concurrent writes, which is harmless
+                            logger.debug(f"Could not load polyline cache (attempt {attempt+1}/{max_retries}): {e}. Will rebuild cache.")
+                            self.cache = {}
+                        else:
+                            # Retry after a brief delay
+                            import time
+                            time.sleep(0.01 * (attempt + 1))
             except Exception as e:
-                logger.warning(f"Could not load polyline cache: {e}")
+                # Unexpected error - log at debug level
+                logger.debug(f"Could not load polyline cache: {e}. Will rebuild cache.")
                 self.cache = {}
         else:
             os.makedirs(os.path.dirname(self.cache_file) or '.', exist_ok=True)
             self.cache = {}
     
     def _save_cache(self) -> None:
-        """Save cache to file."""
+        """Save cache to file atomically."""
         os.makedirs(os.path.dirname(self.cache_file) or '.', exist_ok=True)
-        with open(self.cache_file, 'w') as f:
-            json.dump(self.cache, f, indent=2)
+        # Write to temporary file first, then rename (atomic operation)
+        temp_file = self.cache_file + '.tmp'
+        try:
+            with open(temp_file, 'w') as f:
+                json.dump(self.cache, f, indent=2)
+            # Atomic rename (works on Unix/Linux)
+            os.replace(temp_file, self.cache_file)
+        except Exception as e:
+            # Clean up temp file on error
+            if os.path.exists(temp_file):
+                try:
+                    os.remove(temp_file)
+                except:
+                    pass
+            logger.debug(f"Could not save polyline cache: {e}")
     
     def get_polyline(
         self,

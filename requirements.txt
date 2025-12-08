@@ -28,4 +28,6 @@ mypy>=1.5.0
 # Visualization
 matplotlib>=3.7.0
 numpy>=1.24.0
+folium>=0.14.0
+polyline>=1.4.0
 

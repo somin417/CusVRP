@@ -26,11 +26,21 @@ echo "Removing existing .osrm files to force re-extraction..."
 rm -f "$OSRM_DATA_DIR"/korea-latest.osrm*
 
 echo "Re-extracting road network (5-10 minutes)..."
-docker run --rm \
+# Try with sudo if regular docker doesn't work
+if docker run --rm \
+    -v "$OSRM_DATA_DIR:/data" \
+    --platform linux/amd64 \
+    osrm/osrm-backend:latest \
+    osrm-extract -p /opt/car.lua /data/korea-latest.osm.pbf 2>&1; then
+    echo "✓ Extraction command executed"
+else
+    echo "⚠ Trying with sudo..."
+    sudo docker run --rm \
     -v "$OSRM_DATA_DIR:/data" \
     --platform linux/amd64 \
     osrm/osrm-backend:latest \
     osrm-extract -p /opt/car.lua /data/korea-latest.osm.pbf
+fi
 
 if [ ! -f "$OSRM_FILE" ]; then
     echo "✗ Extraction failed"
@@ -47,11 +57,20 @@ echo ""
 
 # Re-contract
 echo "Re-contracting graph (2-5 minutes)..."
-docker run --rm \
+if docker run --rm \
+    -v "$OSRM_DATA_DIR:/data" \
+    --platform linux/amd64 \
+    osrm/osrm-backend:latest \
+    osrm-contract /data/korea-latest.osrm 2>&1; then
+    echo "✓ Contraction command executed"
+else
+    echo "⚠ Trying with sudo..."
+    sudo docker run --rm \
     -v "$OSRM_DATA_DIR:/data" \
     --platform linux/amd64 \
     osrm/osrm-backend:latest \
     osrm-contract /data/korea-latest.osrm
+fi
 
 echo ""
 echo "=========================================="

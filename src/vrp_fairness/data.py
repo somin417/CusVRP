@@ -4,8 +4,9 @@ Data loading and generation for stops.
 
 import random
 import csv
+import sqlite3
 from typing import List, Dict, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .config import ExperimentConfig, get_city_bounds, get_city_config, CityConfig, DCConfig
 
@@ -18,6 +19,7 @@ class Stop:
     lon: float
     service_time: int = 300  # Default 5 minutes in seconds
     demand: int = 1  # Default demand
+    meta: Dict = field(default_factory=dict)  # Optional metadata
     
     def to_dict(self) -> Dict:
         """Convert to dictionary."""
@@ -96,6 +98,88 @@ def generate_random_stops_in_city(
             lon=lon,
             service_time=service_time,
             demand=1
+        ))
+    
+    return stops
+
+
+def load_stops_from_gpkg(
+    gpkg_path: str,
+    layer: str = "yuseong_housing_2__point",
+    n: Optional[int] = None,
+    seed: int = 0,
+    housing_type: Optional[str] = None,
+    demand_field: Optional[str] = None,
+    service_time_s: int = 300,
+) -> List[Stop]:
+    """
+    Load stops from GeoPackage file using sqlite3 + pandas.
+    
+    Args:
+        gpkg_path: Path to GeoPackage file
+        layer: Table/layer name (default: "yuseong_housing_2__point")
+        n: Number of rows to sample (None = all)
+        seed: Random seed for sampling
+        housing_type: Filter by A9 column ("공동주택" or "단독주택")
+        demand_field: Column to use for demand (e.g., "A26" or None for demand=1)
+        service_time_s: Service time per stop in seconds
+    
+    Returns:
+        List of Stop objects
+    """
+    import pandas as pd
+    
+    # Connect to GeoPackage (it's a SQLite database)
+    conn = sqlite3.connect(gpkg_path)
+    
+    # Build query
+    columns = ["fid", "latitude", "longitude", "A4", "A9", "A26"]
+    query = f"SELECT {', '.join(columns)} FROM {layer}"
+    
+    # Add housing type filter
+    if housing_type:
+        query += f" WHERE A9 = '{housing_type}'"
+    
+    # Execute query and load into pandas
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    
+    if df.empty:
+        raise ValueError(f"No rows found in {layer}" + (f" with A9='{housing_type}'" if housing_type else ""))
+    
+    # Sample if requested
+    if n is not None:
+        if n > len(df):
+            raise ValueError(f"Requested {n} samples but only {len(df)} rows available")
+        df = df.sample(n=n, random_state=seed)
+    
+    # Convert to Stop objects
+    stops = []
+    for _, row in df.iterrows():
+        fid = int(row['fid'])
+        lat = float(row['latitude'])
+        lon = float(row['longitude'])
+        
+        # Determine demand
+        if demand_field == "A26" and pd.notna(row['A26']):
+            demand = int(round(float(row['A26'])))
+        else:
+            demand = 1
+        
+        # Store metadata
+        meta = {
+            "address": str(row['A4']) if pd.notna(row['A4']) else "",
+            "housing_type": str(row['A9']) if pd.notna(row['A9']) else "",
+            "A26": float(row['A26']) if pd.notna(row['A26']) else None
+        }
+        
+        stops.append(Stop(
+            id=str(fid),
+            lat=lat,
+            lon=lon,
+            service_time=service_time_s,
+            demand=demand,
+            meta=meta
         ))
     
     return stops

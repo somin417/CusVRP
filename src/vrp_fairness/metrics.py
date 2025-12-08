@@ -76,7 +76,9 @@ def calculate_route_metrics(
         # If not depot, record arrival and add service time
         if to_stop != depot_id:
             arrival_times[to_stop] = current_time
-            waiting_times[to_stop] = current_time
+            # Weight waiting time by demand (A26 value)
+            demand = stops_dict.get(to_stop, {}).get("demand", 1)
+            waiting_times[to_stop] = current_time * demand
             
             # Add service time
             service_time = stops_dict.get(to_stop, {}).get("service_time", 300)

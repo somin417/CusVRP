@@ -94,8 +94,12 @@ class FairnessLocalSearch:
                 travel_time = self.time_matrix.get((from_stop, stop_id), 0)
                 current_time += travel_time
                 
-                if current_time > worst_wait:
-                    worst_wait = current_time
+                # Weight waiting time by demand (A26 value)
+                demand = self.stops_dict.get(stop_id, {}).get("demand", 1)
+                weighted_wait = current_time * demand
+                
+                if weighted_wait > worst_wait:
+                    worst_wait = weighted_wait
                     worst_stop = (route_idx, stop_idx, stop_id)
                 
                 # Add service time
