@@ -125,6 +125,17 @@ class FairnessLocalSearch:
         # Insert into target route
         new_routes[target_route_idx]["ordered_stop_ids"].insert(target_pos, stop_id)
         
+        # Remove cached cost fields so metrics recalculate from time_matrix
+        for route in [new_routes[route_idx], new_routes[target_route_idx]]:
+            if "total_duration" in route:
+                del route["total_duration"]
+            if "total_distance" in route:
+                del route["total_distance"]
+            if "geometry" in route:
+                del route["geometry"]
+            if "legs" in route:
+                del route["legs"]
+        
         return new_routes
     
     def _apply_swap(
@@ -143,6 +154,17 @@ class FairnessLocalSearch:
         
         new_routes[route_idx1]["ordered_stop_ids"][stop_idx1] = stop_id2
         new_routes[route_idx2]["ordered_stop_ids"][stop_idx2] = stop_id1
+        
+        # Remove cached cost fields so metrics recalculate from time_matrix
+        for route in [new_routes[route_idx1], new_routes[route_idx2]]:
+            if "total_duration" in route:
+                del route["total_duration"]
+            if "total_distance" in route:
+                del route["total_distance"]
+            if "geometry" in route:
+                del route["geometry"]
+            if "legs" in route:
+                del route["legs"]
         
         return new_routes
     
@@ -295,6 +317,14 @@ class FairnessLocalSearch:
             else:
                 # No improving move found
                 break
+
+            # Progress logging every 20 iterations
+            if self.iterations % 20 == 0:
+                logger.info(
+                    f"[LocalSearch] iter={self.iterations}/{max_iters} "
+                    f"W_max={current_metrics.W_max:.1f} "
+                    f"cost={current_metrics.total_cost:.1f}"
+                )
         
         final_metrics = calculate_solution_metrics(
             best_routes, self.stops_dict, self.time_matrix, self.depot_id

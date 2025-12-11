@@ -165,7 +165,7 @@ def _convert_vroom_response(
                 job_id = step.get("id") or step.get("job")
                 if job_id and job_id in job_to_stop:
                     ordered_stop_ids.append(job_to_stop[job_id])
-            
+        
             # Extract leg geometry (from previous step to current)
             if prev_step and step_type in ["job", "end"]:
                 leg_geometry = step.get("geometry")

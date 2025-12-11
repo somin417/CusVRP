@@ -17,6 +17,7 @@ def compute_waiting_times(
 ) -> Dict[str, float]:
     """
     Compute waiting time w_i for each stop by simulating route order.
+    Ensures EVERY non-depot stop in routes_by_dc/routes gets a waiting entry.
     
     Args:
         solution: Solution dict with 'routes_by_dc' or 'routes'
@@ -33,9 +34,10 @@ def compute_waiting_times(
     routes = []
     if "routes_by_dc" in solution:
         for dc_routes in solution["routes_by_dc"].values():
-            routes.extend(dc_routes)
+            if dc_routes:
+                routes.extend(dc_routes)
     elif "routes" in solution:
-        routes = solution["routes"]
+        routes = solution["routes"] or []
     
     # Get depot info
     depots = solution.get("depots", [])
@@ -60,9 +62,11 @@ def compute_waiting_times(
                         if depot.get("id") == dc_id:
                             depot_id_map[dc_id] = depot
                             break
+                else:
+                    depot_id_map[dc_id] = {"id": dc_id}
     
     for route in routes:
-        stop_ids = route.get("ordered_stop_ids", [])
+        stop_ids = route.get("ordered_stop_ids", []) or []
         if not stop_ids:
             continue
         
@@ -100,6 +104,7 @@ def compute_waiting_times(
             
             # Add service time
             stop_data = stops_by_id.get(stop_id, {})
+            # fallback to service_time if service_time_s missing
             service_time = stop_data.get(service_time_field, stop_data.get("service_time", 0))
             current_time += service_time
             
@@ -125,8 +130,8 @@ def compute_Z1(waiting: Dict[str, float], stops_by_id: Dict[str, Dict[str, Any]]
     
     for stop_id, w_i in waiting.items():
         stop_data = stops_by_id.get(stop_id, {})
-        # Get n_i from households or meta, default 1
-        n_i = stop_data.get("households", stop_data.get("meta", {}).get("n_i", 1))
+        # Get n_i from households, demand, or meta, default 1
+        n_i = stop_data.get("households", stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)))
         if n_i is None or n_i == 0:
             n_i = 1
         
@@ -153,7 +158,8 @@ def compute_Z3(waiting: Dict[str, float], stops_by_id: Dict[str, Dict[str, Any]]
     
     for stop_id, w_i in waiting.items():
         stop_data = stops_by_id.get(stop_id, {})
-        n_i = stop_data.get("households", stop_data.get("meta", {}).get("n_i", 1))
+        # Use households if available, otherwise fall back to demand (or meta.n_i), default 1
+        n_i = stop_data.get("households", stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)))
         if n_i is None or n_i == 0:
             n_i = 1
         
@@ -169,13 +175,59 @@ def compute_Z3(waiting: Dict[str, float], stops_by_id: Dict[str, Dict[str, Any]]
     weighted_variance = 0.0
     for stop_id, w_i in waiting.items():
         stop_data = stops_by_id.get(stop_id, {})
-        n_i = stop_data.get("households", stop_data.get("meta", {}).get("n_i", 1))
+        # Use households if available, otherwise fall back to demand (or meta.n_i), default 1
+        n_i = stop_data.get("households", stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)))
         if n_i is None or n_i == 0:
             n_i = 1
         
         weighted_variance += n_i * (w_i - w_bar) ** 2
     
     return weighted_variance
+
+
+def compute_Z3_MAD(waiting: Dict[str, float], stops_by_id: Dict[str, Dict[str, Any]]) -> float:
+    """
+    Compute Z3 = sum_i n_i * |w_i - w_bar| - weighted MAD (Mean Absolute Deviation).
+    
+    This matches the Notion spec: δ_i = |t_i - t̄|, Z3 = Σ n_i δ_i
+    
+    Args:
+        waiting: Dict mapping stop_id -> waiting_time_seconds
+        stops_by_id: Dict mapping stop_id -> stop data
+    
+    Returns:
+        Weighted MAD of waiting times
+    """
+    # Compute weighted mean w_bar
+    total_weight = 0.0
+    weighted_sum = 0.0
+    
+    for stop_id, w_i in waiting.items():
+        stop_data = stops_by_id.get(stop_id, {})
+        # Use households if available, otherwise fall back to demand (or meta.n_i), default 1
+        n_i = stop_data.get("households", stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)))
+        if n_i is None or n_i == 0:
+            n_i = 1
+        
+        total_weight += n_i
+        weighted_sum += n_i * w_i
+    
+    if total_weight == 0:
+        return 0.0
+    
+    w_bar = weighted_sum / total_weight
+    
+    # Compute weighted MAD
+    weighted_mad = 0.0
+    for stop_id, w_i in waiting.items():
+        stop_data = stops_by_id.get(stop_id, {})
+        n_i = stop_data.get("households", stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)))
+        if n_i is None or n_i == 0:
+            n_i = 1
+        
+        weighted_mad += n_i * abs(w_i - w_bar)
+    
+    return weighted_mad
 
 
 def compute_Z2(

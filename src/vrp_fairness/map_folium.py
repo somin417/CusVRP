@@ -15,9 +15,10 @@ except ImportError:
     folium = None
     logger.warning("folium not installed. Install with: pip install folium")
 
-# Import for geometry calculation
+# Import for geometry calculation (OSRM)
 try:
-    from .inavi import get_leg_route, iNaviCache
+    from .osrm_provider import get_osrm_leg
+    from .inavi import iNaviCache
     OSRM_AVAILABLE = True
 except ImportError:
     OSRM_AVAILABLE = False
@@ -510,12 +511,12 @@ def save_route_map_html(
                         # DC -> first stop
                         if stop_ids and stop_ids[0] in stops_by_id:
                             first_stop = stops_by_id[stop_ids[0]]
-                            leg = get_leg_route(
+                            leg = get_osrm_leg(
                                 origin=(dc.lat, dc.lon),
                                 dest=(first_stop["lat"], first_stop["lon"]),
                                 cache=cache
                             )
-                            geometry_coords.extend(leg.polyline)
+                            geometry_coords.extend(leg.get("polyline", []))
                         
                         # Stop -> stop legs
                         for i in range(len(stop_ids) - 1):
@@ -524,29 +525,31 @@ def save_route_map_html(
                             if from_id in stops_by_id and to_id in stops_by_id:
                                 from_stop = stops_by_id[from_id]
                                 to_stop = stops_by_id[to_id]
-                                leg = get_leg_route(
+                                leg = get_osrm_leg(
                                     origin=(from_stop["lat"], from_stop["lon"]),
                                     dest=(to_stop["lat"], to_stop["lon"]),
                                     cache=cache
                                 )
+                                leg_poly = leg.get("polyline", [])
                                 # Skip first point (duplicate of previous leg's last point)
-                                if leg.polyline and len(leg.polyline) > 1:
-                                    geometry_coords.extend(leg.polyline[1:])
-                                elif leg.polyline:
-                                    geometry_coords.extend(leg.polyline)
+                                if leg_poly and len(leg_poly) > 1:
+                                    geometry_coords.extend(leg_poly[1:])
+                                elif leg_poly:
+                                    geometry_coords.extend(leg_poly)
                         
                         # Last stop -> DC
                         if stop_ids and stop_ids[-1] in stops_by_id:
                             last_stop = stops_by_id[stop_ids[-1]]
-                            leg = get_leg_route(
+                            leg = get_osrm_leg(
                                 origin=(last_stop["lat"], last_stop["lon"]),
                                 dest=(dc.lat, dc.lon),
                                 cache=cache
                             )
-                            if leg.polyline and len(leg.polyline) > 1:
-                                geometry_coords.extend(leg.polyline[1:])
-                            elif leg.polyline:
-                                geometry_coords.extend(leg.polyline)
+                            leg_poly = leg.get("polyline", [])
+                            if leg_poly and len(leg_poly) > 1:
+                                geometry_coords.extend(leg_poly[1:])
+                            elif leg_poly:
+                                geometry_coords.extend(leg_poly)
                         
                         if geometry_coords:
                             # Store as geometry for future use

@@ -324,6 +324,32 @@ Where:
 - **Destroy**: Random stop removal (removes geometry to force recalculation)
 - **Repair**: Regret-2 insertion with incremental evaluation
 
+### CTS-ALNS: Contextual Thompson Sampling for Operator Selection
+
+The ALNS algorithm can use **Contextual Thompson Sampling (CTS)** to adaptively select destroy/repair operator pairs based on the current solution state.
+
+**Operator Pairs:**
+- `worst_k + regret2`: Remove worst stops, regret-2 insertion
+- `worst_k + best_insert`: Remove worst stops, best insertion
+- `cluster_k + regret2`: Remove clustered stops, regret-2 insertion
+- `cluster_k + best_insert`: Remove clustered stops, best insertion
+- `random_k + regret2`: Remove random stops, regret-2 insertion
+- `random_k + best_insert`: Remove random stops, best insertion
+
+**Context Features:**
+- Normalized objectives (Z1/Z1*, Z2/Z2*, Z3/Z3*)
+- Cost budget slack
+- DC imbalance (route duration variation)
+- Tail ratio (top-10% weighted waiting / overall mean)
+- Boundary ratio (fraction of stops near multiple depots)
+- Iteration progress
+
+**Reward Function:**
+- Positive reward for Z1 improvement (if within cost budget)
+- Negative penalty for cost budget violations
+
+Use `--operator-mode cts` to enable CTS-based operator selection.
+
 ---
 
 ## Requirements
@@ -349,6 +375,43 @@ python scripts/test_proposed_on_realdata.py \
   --iters 100 \
   --seed 0
 ```
+
+## Example Commands
+
+### Single CTS Run
+
+```bash
+python -m src.vrp_fairness.run_experiment \
+  --gpkg data/yuseong_housing_3__point.gpkg \
+  --sample-n 60 \
+  --eps 0.10 \
+  --alpha 1.0 \
+  --beta 0.2 \
+  --gamma 0.2 \
+  --iters 200 \
+  --operator-mode cts \
+  --method proposed
+```
+
+### Comparison Experiment (ALNS vs ALNS+CTS)
+
+```bash
+python scripts/compare_cts_vs_alns.py \
+  --gpkg data/yuseong_housing_3__point.gpkg \
+  --n-stops 100 \
+  --eps 0.10 \
+  --alpha 1.0 \
+  --beta 0.2 \
+  --gamma 0.2 \
+  --iters 200 \
+  --runs 10
+```
+
+This will:
+- Run 10 experiments with different seeds
+- Compare fixed operator selection vs CTS-based selection
+- Generate summary statistics and trace files
+- Save results to `outputs/experiments/cts_vs_alns_results.csv`
 
 ---
 

@@ -49,15 +49,29 @@ class ExperimentConfig(BaseModel):
     @field_validator("dcs")
     @classmethod
     def parse_dcs(cls, v: List[str]) -> List[DCConfig]:
-        """Parse DC coordinate strings into DCConfig objects."""
+        """Parse DC coordinate strings into DCConfig objects.
+        
+        Supports formats:
+        - "lat,lon" -> DC1, DC2, ...
+        - "lat,lon,name" -> uses provided name
+        """
         dcs = []
         for i, dc_str in enumerate(v):
             try:
                 parts = dc_str.strip().split(",")
-                if len(parts) != 2:
-                    raise ValueError(f"Invalid DC format: {dc_str}")
-                lat, lon = float(parts[0]), float(parts[1])
-                dcs.append(DCConfig(id=f"DC{i+1}", lat=lat, lon=lon, name=f"DC{i+1}"))
+                if len(parts) == 2:
+                    # Format: lat,lon
+                    lat, lon = float(parts[0]), float(parts[1])
+                    dc_id = f"DC{i+1}"
+                    name = dc_id
+                elif len(parts) == 3:
+                    # Format: lat,lon,name
+                    lat, lon = float(parts[0]), float(parts[1])
+                    dc_id = parts[2].strip()
+                    name = dc_id
+                else:
+                    raise ValueError(f"Invalid DC format: {dc_str} (expected 'lat,lon' or 'lat,lon,name')")
+                dcs.append(DCConfig(id=dc_id, lat=lat, lon=lon, name=name))
             except ValueError as e:
                 raise ValueError(f"Invalid DC coordinates '{dc_str}': {e}")
         return dcs

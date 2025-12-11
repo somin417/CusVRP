@@ -20,11 +20,71 @@ from .local_search import FairnessLocalSearch
 from .plotting import plot_routes_baseline_vs_improved, plot_waiting_time_histograms, extract_waiting_times
 from .map_folium import save_route_map_html
 
+# Optional plotly for interactive plots
+try:
+    import plotly.graph_objects as go
+except ImportError:
+    go = None
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+def attach_wait_and_travel(solution: Dict[str, Any], stops_dict: Dict[str, Any], time_provider, distance_provider) -> Dict[str, Any]:
+    """
+    Compute waiting map and per-leg travel times for a solution and attach to the solution dict.
+    Stores:
+      - waiting_times: {stop_id: arrival_time}
+      - travel_times: list of {"from": prev_id, "to": stop_id, "time": travel_time, "dc": dc_id, "vehicle": vehicle_id}
+    """
+    from .objectives import compute_waiting_times, compute_Z1, compute_Z2, compute_Z3_MAD
+
+    waiting = compute_waiting_times(solution, stops_dict, time_provider)
+    travel_records = []
+
+    routes = []
+    if "routes_by_dc" in solution:
+        for dc_id, dc_routes in solution["routes_by_dc"].items():
+            for r in dc_routes:
+                routes.append((dc_id, r))
+    elif "routes" in solution:
+        routes = [(None, r) for r in solution["routes"]]
+
+    # depot lookup
+    depots = solution.get("depots", [])
+    depot_lookup = {d.get("id", "depot"): d for d in depots} if isinstance(depots, list) else {}
+
+    for dc_id, route in routes:
+        stop_ids = route.get("ordered_stop_ids", [])
+        if not stop_ids:
+            continue
+        depot_id = route.get("dc_id") or route.get("depot_id") or dc_id or (list(depot_lookup.keys())[0] if depot_lookup else "depot")
+        prev_id = depot_id
+        for sid in stop_ids:
+            if sid == depot_id:
+                continue
+            t = time_provider(prev_id, sid)
+            travel_records.append({
+                "from": prev_id,
+                "to": sid,
+                "time": t,
+                "dc": dc_id,
+                "vehicle": route.get("vehicle_id")
+            })
+            prev_id = sid
+
+    solution["waiting_times"] = waiting
+    solution["travel_times"] = travel_records
+    # Also store objectives for convenience
+    solution["objectives"] = {
+        "Z1": compute_Z1(waiting, stops_dict),
+        "Z2": compute_Z2(solution, distance_provider, time_provider, False),
+        "Z3_MAD": compute_Z3_MAD(waiting, stops_dict),
+    }
+    return solution
 
 
 def build_time_matrix_dict(
@@ -138,7 +198,8 @@ def run_baseline(
                 "lat": stop.lat,
                 "lon": stop.lon,
                 "service_time": stop.service_time,
-                "demand": stop.demand
+                "demand": stop.demand,
+                "households": stop.demand  # Use demand as households (A26 value from GPKG)
             }
         
         # Call /vrp
@@ -340,17 +401,24 @@ def run_improvement(
             routes_by_dc[dc_id] = []
         routes_by_dc[dc_id].append(route)
     
+    # Include stops_dict and depots from baseline for consistency
+    depots = baseline_solution.get("depots", [])
+    
     return {
         "routes_by_dc": routes_by_dc,
         "routes": improved_routes,
-        "metrics": metrics_to_dict(improved_metrics)
+        "metrics": metrics_to_dict(improved_metrics),
+        "stops_dict": all_stops_dict,  # Include stops_dict for scoring/plotting
+        "depots": depots  # Include depots for scoring/plotting
     }
 
 
 def save_results(
     baseline: Dict[str, Any],
     improved: Optional[Dict[str, Any]],
-    config: ExperimentConfig
+    config: ExperimentConfig,
+    method: str = "local",
+    operator_mode: str = "fixed"
 ) -> None:
     """Save results to JSON and CSV files."""
     output_dir = Path(config.output_dir)
@@ -373,7 +441,13 @@ def save_results(
     
     # Save improved if available
     if improved:
-        improved_file = output_dir / "improved.json"
+        # Save local results to local.json, CTS results to cts_solution.json, other proposed to improved.json
+        if method == "local":
+            improved_file = output_dir / "local.json"
+        elif method == "proposed" and operator_mode == "cts":
+            improved_file = output_dir / "cts_solution.json"
+        else:
+            improved_file = output_dir / "improved.json"
         with open(improved_file, 'w') as f:
             json.dump(improved, f, indent=2)
         logger.info(f"Saved improved solution to {improved_file}")
@@ -401,11 +475,53 @@ def save_results(
         logger.info(f"Saved comparison to {comparison_file}")
 
 
+def _save_wait_hist_interactive(
+    baseline_waits: List[float],
+    improved_waits: Optional[List[float]],
+    city_name: str,
+    output_path: str
+) -> None:
+    """Save interactive waiting-time histogram (baseline vs improved) as HTML."""
+    if go is None:
+        logger.info("plotly not installed; skipping interactive wait histogram")
+        return
+    
+    fig = go.Figure()
+    fig.add_trace(go.Histogram(
+        x=baseline_waits,
+        name="Baseline",
+        opacity=0.6,
+        marker_color="#1f77b4",
+        nbinsx=40
+    ))
+    if improved_waits is not None:
+        fig.add_trace(go.Histogram(
+            x=improved_waits,
+            name="Improved",
+            opacity=0.6,
+            marker_color="#ff7f0e",
+            nbinsx=40
+        ))
+    
+    fig.update_layout(
+        barmode="overlay",
+        title=f"Waiting Time Distribution (weighted by demand) - {city_name}",
+        xaxis_title="Weighted waiting time (seconds)",
+        yaxis_title="Count",
+        legend_title="Solution",
+        template="plotly_white"
+    )
+    
+    fig.write_html(output_path, include_plotlyjs="cdn")
+    logger.info(f"Generated interactive waiting histogram: {output_path}")
+
+
 def generate_plots(
     baseline: Dict[str, Any],
     improved: Optional[Dict[str, Any]],
     config: ExperimentConfig,
-    plot_format: str = "png"
+    plot_format: str = "png",
+    method: str = "local"
 ) -> List[str]:
     """
     Generate visualization plots.
@@ -415,6 +531,7 @@ def generate_plots(
         improved: Improved solution (None if no improvement)
         config: Experiment configuration
         plot_format: Plot format ("png" or "pdf")
+        method: Method name for labeling (default: "local", can be "proposed" -> "ALNS")
     
     Returns:
         List of generated plot file paths
@@ -450,36 +567,87 @@ def generate_plots(
     plot_paths.append(str(routes_plot_path))
     logger.info(f"Generated route plot: {routes_plot_path}")
     
-    # Plot 2: Waiting time histograms (requires time_matrix)
-    if has_time_matrix:
-        # Extract waiting times for all DCs
-        baseline_waits = []
-        improved_waits = [] if improved else None
-        
+    # Plot 2: Waiting time histograms (weighted by demand) + interactive HTML
+    # Always attempt to produce waiting hist; fallback to OSRM if no time_matrix
+    baseline_waits: Optional[List[float]] = None
+    improved_waits: Optional[List[float]] = None
+    
+    def _build_waits_from_matrix():
+        bw = []
+        iw = [] if improved else None
         for dc in config.dc_list:
             dc_baseline_routes = baseline["routes_by_dc"].get(dc.id, [])
-            baseline_waits.extend(
+            bw.extend(
                 extract_waiting_times(dc_baseline_routes, baseline["stops_dict"], time_matrix, dc.id)
             )
-            
             if improved:
                 dc_improved_routes = improved["routes_by_dc"].get(dc.id, [])
-                improved_waits.extend(
+                iw.extend(
                     extract_waiting_times(dc_improved_routes, baseline["stops_dict"], time_matrix, dc.id)
                 )
+        return bw, iw
+    
+    def _build_waits_from_osrm():
+        from .osrm_provider import create_osrm_providers
+        from .objectives import compute_waiting_times
+        from .inavi import iNaviCache
         
+        cache = iNaviCache(approx_mode=False)
+        depots = [{"id": dc.id, "lat": dc.lat, "lon": dc.lon} for dc in config.dc_list]
+        stops_by_id = baseline.get("stops_dict", {})
+        if not depots or not stops_by_id:
+            raise RuntimeError("Missing depots or stops_dict for waiting-time histogram fallback")
+        
+        time_provider, _ = create_osrm_providers(depots, stops_by_id, cache)
+        
+        bw = []
+        baseline_waiting = compute_waiting_times(baseline, stops_by_id, time_provider)
+        for stop_id, w in baseline_waiting.items():
+            demand = stops_by_id.get(stop_id, {}).get("demand", 1)
+            bw.append(w * demand)
+        
+        iw = None
+        if improved:
+            iw = []
+            improved_waiting = compute_waiting_times(improved, stops_by_id, time_provider)
+            for stop_id, w in improved_waiting.items():
+                demand = stops_by_id.get(stop_id, {}).get("demand", 1)
+                iw.append(w * demand)
+        return bw, iw
+    
+    try:
+        if has_time_matrix:
+            baseline_waits, improved_waits = _build_waits_from_matrix()
+        else:
+            baseline_waits, improved_waits = _build_waits_from_osrm()
+    except Exception as e:
+        logger.info(f"Skipping waiting time histogram (all fallbacks failed: {e})")
+        baseline_waits, improved_waits = None, None
+    
+    if baseline_waits is not None:
+        # Determine improved label based on method
+        improved_label = "ALNS" if method == "proposed" else method.title()
+        
+        # Matplotlib histogram
         wait_hist_plot_path = plots_dir / f"{run_id}_wait_hist.{plot_format}"
         plot_waiting_time_histograms(
             baseline_waits=baseline_waits,
             improved_waits=improved_waits,
             city_name=config.city,
             output_path=str(wait_hist_plot_path),
-            plot_format=plot_format
+            plot_format=plot_format,
+            improved_label=improved_label
         )
         plot_paths.append(str(wait_hist_plot_path))
         logger.info(f"Generated waiting time histogram: {wait_hist_plot_path}")
-    else:
-        logger.info("Skipping waiting time histogram (time_matrix not available - use --method local for timetable plots)")
+        
+        # Interactive Plotly histogram
+        _save_wait_hist_interactive(
+            baseline_waits=baseline_waits,
+            improved_waits=improved_waits,
+            city_name=config.city,
+            output_path=str(plots_dir / f"{run_id}_wait_hist.html")
+        )
     
     return plot_paths
 
@@ -549,6 +717,8 @@ def main():
     parser.add_argument("--normalize", type=str, default="baseline", choices=["baseline", "best_known"], help="Normalization method")
     parser.add_argument("--use-distance-objective", action="store_true", help="Use distance for Z2 (else duration)")
     parser.add_argument("--enforce-capacity", action="store_true", help="Enforce capacity constraints")
+    parser.add_argument("--operator-mode", type=str, default="fixed", choices=["fixed", "cts"], help="ALNS operator selection mode: fixed or cts (Contextual Thompson Sampling)")
+    parser.add_argument("--use-mad", action="store_true", help="Use MAD (Mean Absolute Deviation) for Z3 instead of variance")
     
     args = parser.parse_args()
     
@@ -556,18 +726,34 @@ def main():
     if args.num_dcs is not None:
         if args.dcs:
             logger.warning("Both --dcs and --num-dcs specified. Using --num-dcs and ignoring --dcs")
-        import random
-        random.seed(args.seed)
-        city_config = get_city_config(args.city)
-        dcs_list = []
-        for i in range(args.num_dcs):
-            lat = random.uniform(city_config.lat_min, city_config.lat_max)
-            lon = random.uniform(city_config.lon_min, city_config.lon_max)
-            dcs_list.append(f"{lat:.6f},{lon:.6f}")
+        
+        # Use predefined DCs for daejeon if num_dcs == 3
+        if args.num_dcs == 3 and args.city == "daejeon":
+            dcs_list = [
+                "36.3800587,127.3777765,DC_Logen",
+                "36.3711833,127.4050933,DC_Hanjin",
+                "36.449416,127.4070349,DC_CJ"
+            ]
+            logger.info(f"Using predefined DCs for Daejeon")
+            for dc_str in dcs_list:
+                parts = dc_str.split(",")
+                if len(parts) >= 3:
+                    logger.info(f"  {parts[2]}: {parts[0]}, {parts[1]}")
+                else:
+                    logger.info(f"  {dc_str}")
+        else:
+            import random
+            random.seed(args.seed)
+            city_config = get_city_config(args.city)
+            dcs_list = []
+            for i in range(args.num_dcs):
+                lat = random.uniform(city_config.lat_min, city_config.lat_max)
+                lon = random.uniform(city_config.lon_min, city_config.lon_max)
+                dcs_list.append(f"{lat:.6f},{lon:.6f}")
+            logger.info(f"Generated {args.num_dcs} random DCs in {args.city}")
+            for i, dc_str in enumerate(dcs_list, 1):
+                logger.info(f"  DC{i}: {dc_str}")
         args.dcs = dcs_list
-        logger.info(f"Generated {args.num_dcs} random DCs in {args.city}")
-        for i, dc_str in enumerate(args.dcs, 1):
-            logger.info(f"  DC{i}: {dc_str}")
     elif not args.dcs:
         logger.error("Either --dcs or --num-dcs must be specified")
         sys.exit(1)
@@ -604,7 +790,7 @@ def main():
         if plot_format not in ["png", "pdf"]:
             plot_format = "png"
         
-        plot_paths = generate_plots(baseline, improved, config, plot_format=plot_format)
+        plot_paths = generate_plots(baseline, improved, config, plot_format=plot_format, method=args.method)
         print("\n" + "=" * 80)
         print("GENERATED PLOTS")
         print("=" * 80)
@@ -760,12 +946,13 @@ def main():
             baseline["stops_dict"] = {}
             for depot_id, assigned_stops in stops_by_depot.items():
                 for stop in assigned_stops:
-                    baseline["stops_dict"][stop["id"]] = {
-                        "lat": stop["lat"],
-                        "lon": stop["lon"],
-                        "demand": stop.get("demand", 1),
-                        "service_time_s": stop.get("service_time_s", 300),
-                        "households": stop.get("households", 1)
+                    # stop is a Stop object, not a dict
+                    baseline["stops_dict"][stop.id] = {
+                        "lat": stop.lat,
+                        "lon": stop.lon,
+                        "demand": stop.demand,
+                        "service_time_s": stop.service_time,
+                        "households": stop.demand  # Use demand as households (A26 value from GPKG)
                     }
     
     # Log baseline metrics per depot and overall
@@ -781,6 +968,7 @@ def main():
     
     # Run improvement or proposed algorithm
     improved = None
+    proposed_debug = None
     if not args.baseline_only:
         if args.method == "proposed":
             from .proposed_algorithm import proposed_algorithm
@@ -792,17 +980,35 @@ def main():
                 baseline["stops_dict"] = {}
                 for depot_id, assigned_stops in stops_by_depot.items():
                     for stop in assigned_stops:
-                        baseline["stops_dict"][stop["id"]] = {
-                            "lat": stop["lat"],
-                            "lon": stop["lon"],
-                            "demand": stop.get("demand", 1),
-                            "service_time_s": stop.get("service_time_s", 300),
-                            "households": stop.get("households", 1)
+                        # stop is a Stop object, not a dict
+                        baseline["stops_dict"][stop.id] = {
+                            "lat": stop.lat,
+                            "lon": stop.lon,
+                            "demand": stop.demand,
+                            "service_time_s": stop.service_time,
+                            "households": stop.demand  # Use demand as households (A26 value from GPKG)
                         }
             
             time_provider, distance_provider = create_osrm_providers(depots, baseline["stops_dict"], cache)
             
-            improved, debug = proposed_algorithm(
+            # Patch compute_Z3 to use MAD if --use-mad is set
+            import src.vrp_fairness.proposed_algorithm as pa_module
+            import src.vrp_fairness.objectives as obj_module
+            original_compute_Z3 = None
+            if args.use_mad:
+                original_compute_Z3 = obj_module.compute_Z3
+                from .objectives import compute_Z3_MAD
+                
+                def compute_Z3_wrapper(waiting, stops_by_id):
+                    return compute_Z3_MAD(waiting, stops_by_id)
+                
+                # Patch both modules (proposed_algorithm imports compute_Z3 directly)
+                obj_module.compute_Z3 = compute_Z3_wrapper
+                pa_module.compute_Z3 = compute_Z3_wrapper
+                logger.info("Patched compute_Z3 to use MAD for Z3 calculation")
+            
+            try:
+                improved, debug = proposed_algorithm(
                 depots=depots,
                 vehicles=vehicles_by_depot,
                 stops_by_depot=stops_by_depot_dict,
@@ -816,8 +1022,18 @@ def main():
                 distance_provider=distance_provider,
                 normalize=args.normalize,
                 use_distance_objective=args.use_distance_objective,
-                enforce_capacity=args.enforce_capacity
+                enforce_capacity=args.enforce_capacity,
+                operator_mode=args.operator_mode
             )
+            
+                # Store debug info for later use in Z score calculation
+                proposed_debug = debug
+            finally:
+                # Restore original compute_Z3 if patched
+                if args.use_mad and original_compute_Z3 is not None:
+                    obj_module.compute_Z3 = original_compute_Z3
+                    pa_module.compute_Z3 = original_compute_Z3
+                    logger.info("Restored original compute_Z3")
             
             # Save trace
             import csv
@@ -825,20 +1041,63 @@ def main():
             trace_dir.mkdir(parents=True, exist_ok=True)
             run_id = f"seed{config.seed}_n{len(stops)}_daejeon"
             trace_file = trace_dir / f"{run_id}_proposed.csv"
+            # Trace fields depend on operator mode
+            fieldnames = ["iter", "Z", "Z1", "Z2", "Z3", "accepted", "k_removed"]
+            if args.operator_mode == "cts":
+                fieldnames.extend(["chosen_arm", "reward"])
+            
             with open(trace_file, 'w', newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=["iter", "Z", "Z1", "Z2", "Z3", "accepted", "k_removed"])
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(debug["trace"])
             logger.info(f"Trace saved: {trace_file}")
+            
+            # Save best solution backup if available
+            best_backup = debug.get("best_solution_backup")
+            if best_backup:
+                backup_dir = Path(config.output_dir) / "best_solutions"
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                backup_file = backup_dir / f"{run_id}_best.json"
+                # Save solution with metadata
+                backup_data = {
+                    "solution": best_backup["solution"],
+                    "waiting": best_backup.get("waiting"),
+                    "Z": best_backup["Z"],
+                    "Z1": best_backup["Z1"],
+                    "Z2": best_backup["Z2"],
+                    "Z3": best_backup["Z3"],
+                    "iteration": best_backup["iteration"],
+                    "run_id": run_id
+                }
+                with open(backup_file, 'w') as f:
+                    json.dump(backup_data, f, indent=2)
+                logger.info(f"Best solution backup saved: {backup_file} (iter {best_backup['iteration']}, Z={best_backup['Z']:.6f})")
         else:
             improved = run_improvement(baseline, config, cache)
+            proposed_debug = None
     
+    # Attach waiting/travel times (baseline and improved) before saving
+    from .osrm_provider import create_osrm_providers
+    try:
+        tp, dp = create_osrm_providers(depots, baseline.get("stops_dict", {}), cache)
+        baseline = attach_wait_and_travel(baseline, baseline.get("stops_dict", {}), tp, dp)
+        if improved:
+            improved = attach_wait_and_travel(improved, baseline.get("stops_dict", {}), tp, dp)
+    except Exception as e:
+        logger.warning(f"Failed to attach waiting/travel times: {e}")
+
     # Save results
-    save_results(baseline, improved, config)
+    save_results(baseline, improved, config, method=args.method, operator_mode=args.operator_mode)
+    
+    # Save proposed_debug if available (for comparison scripts)
+    if proposed_debug is not None:
+        debug_file = Path(config.output_dir) / "proposed_debug.json"
+        with open(debug_file, 'w') as f:
+            json.dump(proposed_debug, f, indent=2)
+        logger.info(f"Saved proposed debug info: {debug_file}")
     
     # Save proposed solution separately if method is proposed
     if args.method == "proposed" and improved:
-        import json
         solution_dir = Path(config.output_dir) / "solutions"
         solution_dir.mkdir(parents=True, exist_ok=True)
         run_id = f"seed{config.seed}_n{len(stops)}_daejeon"
@@ -846,35 +1105,91 @@ def main():
         with open(solution_file, 'w') as f:
             json.dump(improved, f, indent=2)
         logger.info(f"Proposed solution saved: {solution_file}")
-        
-        # Print comparison
-        from .objectives import compute_waiting_times, compute_Z1, compute_Z2, compute_Z3, compute_combined_Z
+    
+    # Print Z scores comparison for all methods (skip if baseline-only or improved is None)
+    if improved and args.method != "baseline":
+        from .objectives import compute_waiting_times, compute_Z1, compute_Z2, compute_Z3, compute_Z3_MAD, compute_combined_Z
         from .osrm_provider import create_osrm_providers
+        
+        # Use same provider instance for both baseline and improved to ensure consistency
         time_provider, distance_provider = create_osrm_providers(depots, baseline["stops_dict"], cache)
         
-        waiting_baseline = compute_waiting_times(baseline, baseline["stops_dict"], time_provider)
-        Z1_baseline = compute_Z1(waiting_baseline, baseline["stops_dict"])
-        Z2_baseline = compute_Z2(baseline, distance_provider, time_provider, args.use_distance_objective)
-        Z3_baseline = compute_Z3(waiting_baseline, baseline["stops_dict"])
+        # Choose Z3 function based on --use-mad flag
+        compute_Z3_func = compute_Z3_MAD if args.use_mad else compute_Z3
+        
+        # For proposed method, use normalizers and baseline objectives from debug info if available
+        if args.method == "proposed" and proposed_debug:
+            normalizers = proposed_debug.get("normalizers", {})
+            baseline_objectives = proposed_debug.get("baseline_objectives", {})
+            
+            if baseline_objectives:
+                # Use exact baseline objectives from proposed_algorithm (computed with same provider)
+                Z1_baseline = baseline_objectives.get("Z1")
+                Z2_baseline = baseline_objectives.get("Z2")
+                Z3_baseline = baseline_objectives.get("Z3")
+                logger.info(f"Using baseline objectives from proposed_algorithm: Z1={Z1_baseline:.1f}, Z2={Z2_baseline:.1f}, Z3={Z3_baseline:.1f}")
+            else:
+                # Fallback: recompute baseline
+                waiting_baseline = compute_waiting_times(baseline, baseline["stops_dict"], time_provider)
+                Z1_baseline = compute_Z1(waiting_baseline, baseline["stops_dict"])
+                Z2_baseline = compute_Z2(baseline, distance_provider, time_provider, args.use_distance_objective)
+                Z3_baseline = compute_Z3_func(waiting_baseline, baseline["stops_dict"])
+            
+            Z1_star = normalizers.get("Z1_star", Z1_baseline)
+            Z2_star = normalizers.get("Z2_star", Z2_baseline)
+            Z3_star = normalizers.get("Z3_star", Z3_baseline)
+        else:
+            # For local method: recompute baseline with same provider for consistency
+            # This ensures baseline and improved use the exact same provider
+            waiting_baseline = compute_waiting_times(baseline, baseline["stops_dict"], time_provider)
+            Z1_baseline = compute_Z1(waiting_baseline, baseline["stops_dict"])
+            Z2_baseline = compute_Z2(baseline, distance_provider, time_provider, args.use_distance_objective)
+            Z3_baseline = compute_Z3_func(waiting_baseline, baseline["stops_dict"])
+            
+            # Use baseline values as normalizers
+            Z1_star, Z2_star, Z3_star = Z1_baseline, Z2_baseline, Z3_baseline
+        
+        # Baseline Z should be exactly 1.0 (using its own values as normalizers)
         Z_baseline = compute_combined_Z(Z1_baseline, Z2_baseline, Z3_baseline,
-                                        Z1_baseline, Z2_baseline, Z3_baseline,
+                                        Z1_star, Z2_star, Z3_star,
                                         args.alpha, args.beta, args.gamma)
         
-        waiting_proposed = compute_waiting_times(improved, improved["stops_dict"], time_provider)
-        Z1_proposed = compute_Z1(waiting_proposed, improved["stops_dict"])
-        Z2_proposed = compute_Z2(improved, distance_provider, time_provider, args.use_distance_objective)
-        Z3_proposed = compute_Z3(waiting_proposed, improved["stops_dict"])
-        Z_proposed = compute_combined_Z(Z1_proposed, Z2_proposed, Z3_proposed,
-                                       Z1_baseline, Z2_baseline, Z3_baseline,
+        # Verify baseline Z is 1.0
+        if abs(Z_baseline - 1.0) > 0.001:
+            logger.warning(f"Baseline Z is not 1.0! Z_baseline={Z_baseline:.6f}, expected 1.0")
+            logger.warning(f"  Z1={Z1_baseline:.1f}, Z2={Z2_baseline:.1f}, Z3={Z3_baseline:.1f}")
+            logger.warning(f"  Z1*={Z1_star:.1f}, Z2*={Z2_star:.1f}, Z3*={Z3_star:.1f}")
+            logger.warning(f"  alpha={args.alpha}, beta={args.beta}, gamma={args.gamma}")
+        
+        # Compute improved Z-scores using same provider
+        # Always use baseline stops_dict for consistency (stops_dict contains metadata that shouldn't change)
+        waiting_improved = compute_waiting_times(improved, baseline["stops_dict"], time_provider)
+        Z1_improved = compute_Z1(waiting_improved, baseline["stops_dict"])
+        Z2_improved = compute_Z2(improved, distance_provider, time_provider, args.use_distance_objective)
+        Z3_improved = compute_Z3_func(waiting_improved, baseline["stops_dict"])
+        Z_improved = compute_combined_Z(Z1_improved, Z2_improved, Z3_improved,
+                                       Z1_star, Z2_star, Z3_star,
                                        args.alpha, args.beta, args.gamma)
         
+        method_name = "ALNS" if args.method == "proposed" else args.method.title()
         print("\n" + "=" * 80)
-        print("BASELINE vs PROPOSED")
+        print(f"BASELINE vs {method_name.upper()}")
         print("=" * 80)
-        print(f"Z:  {Z_baseline:.3f} -> {Z_proposed:.3f} ({((Z_baseline-Z_proposed)/Z_baseline*100):.1f}% improvement)")
-        print(f"Z1: {Z1_baseline:.1f} -> {Z1_proposed:.1f} ({((Z1_baseline-Z1_proposed)/Z1_baseline*100):.1f}% improvement)")
-        print(f"Z2: {Z2_baseline:.1f} -> {Z2_proposed:.1f} ({((Z2_baseline-Z2_proposed)/Z2_baseline*100):.1f}% improvement)")
-        print(f"Z3: {Z3_baseline:.1f} -> {Z3_proposed:.1f} ({((Z3_baseline-Z3_proposed)/Z3_baseline*100):.1f}% improvement)")
+        print(f"{'Metric':<10} {'Baseline':<15} {method_name:<15} {'Change %':<15}")
+        print("-" * 80)
+        
+        for metric, base_val, imp_val in [
+            ("Z", Z_baseline, Z_improved),
+            ("Z1", Z1_baseline, Z1_improved),
+            ("Z2", Z2_baseline, Z2_improved),
+            ("Z3", Z3_baseline, Z3_improved)
+        ]:
+            if base_val > 0:
+                change_pct = ((base_val - imp_val) / base_val) * 100
+            else:
+                change_pct = 0.0
+            print(f"{metric:<10} {base_val:<15.3f} {imp_val:<15.3f} {change_pct:+.2f}%")
+        
         print("=" * 80 + "\n")
     
     # Generate plots (unless disabled)
@@ -885,7 +1200,7 @@ def main():
             logger.warning(f"Invalid plot format '{plot_format}', using 'png'")
             plot_format = "png"
         
-        plot_paths = generate_plots(baseline, improved, config, plot_format=plot_format)
+        plot_paths = generate_plots(baseline, improved, config, plot_format=plot_format, method=args.method)
         print("\n" + "=" * 80)
         print("GENERATED PLOTS")
         print("=" * 80)
@@ -913,7 +1228,8 @@ def main():
                         "lat": stop.lat,
                         "lon": stop.lon,
                         "demand": stop.demand,
-                        "service_time": stop.service_time
+                        "service_time": stop.service_time,
+                        "households": stop.demand  # Use demand as households (A26 value from GPKG)
                     }
         
         # Generate run ID for filename

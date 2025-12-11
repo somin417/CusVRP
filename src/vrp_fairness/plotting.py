@@ -122,7 +122,9 @@ def extract_waiting_times(
         route_metrics = calculate_route_metrics(
             route, stops_dict, time_matrix, depot_id=dc_id
         )
-        waiting_times.extend(route_metrics.waiting_times.values())
+        for stop_id, w in route_metrics.waiting_times.items():
+            demand = stops_dict.get(stop_id, {}).get("demand", 1)
+            waiting_times.append(w * demand)
     
     return waiting_times
 
@@ -258,7 +260,8 @@ def plot_waiting_time_histograms(
     improved_waits: Optional[List[float]],
     city_name: str,
     output_path: str,
-    plot_format: str = "png"
+    plot_format: str = "png",
+    improved_label: str = "Improved"
 ) -> None:
     """
     Plot side-by-side histograms of waiting times.
@@ -269,6 +272,7 @@ def plot_waiting_time_histograms(
         city_name: City name for title
         output_path: Output file path
         plot_format: Plot format ("png" or "pdf")
+        improved_label: Label for improved solution (default: "Improved", can be "ALNS", etc.)
     """
     fig, ax = plt.subplots(1, 1, figsize=(10, 6))
     
@@ -280,67 +284,80 @@ def plot_waiting_time_histograms(
         plt.close()
         return
     
-    # Determine bins
+    # Determine bins and side-by-side bars to reduce overlap
     all_waits = baseline_waits + (improved_waits or [])
     max_wait = max(all_waits) if all_waits else 1.0
-    bins = np.linspace(0, max_wait * 1.1, min(30, max(10, len(baseline_waits) // 3)))
+    bins = np.linspace(0, max_wait * 1.05, min(60, max(20, len(baseline_waits) // 3)))
+    bin_width = bins[1] - bins[0] if len(bins) > 1 else 1.0
+    centers = bins[:-1] + bin_width / 2
     
-    # Plot histograms
+    base_counts, _ = np.histogram(baseline_waits, bins=bins)
+    imp_counts = None
     if improved_waits:
-        ax.hist(
-            baseline_waits, bins=bins,
-            alpha=0.6, label='Baseline',
-            color='skyblue', edgecolor='black', linewidth=1
-        )
-        ax.hist(
-            improved_waits, bins=bins,
-            alpha=0.6, label='Improved',
-            color='coral', edgecolor='black', linewidth=1
-        )
-    else:
-        ax.hist(
-            baseline_waits, bins=bins,
-            alpha=0.7, label='Baseline',
-            color='skyblue', edgecolor='black', linewidth=1
-        )
-        ax.text(
-            0.5, 0.95, 'No improvement data available',
-            transform=ax.transAxes,
-            ha='center', va='top',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
-            fontsize=12
+        imp_counts, _ = np.histogram(improved_waits, bins=bins)
+    
+    offset = bin_width * 0.2
+    ax.bar(
+        centers - offset,
+        base_counts,
+        width=bin_width * 0.4,
+        alpha=0.75,
+        color='#4C78A8',
+        label='Baseline',
+        edgecolor='white',
+        linewidth=0.7
+    )
+    if imp_counts is not None:
+        ax.bar(
+            centers + offset,
+            imp_counts,
+            width=bin_width * 0.4,
+            alpha=0.75,
+            color='#F58518',
+            label=improved_label,
+            edgecolor='white',
+            linewidth=0.7
         )
     
-    # Statistics text
+    # Statistics text (placed above plot to avoid covering bars)
     if baseline_waits:
         baseline_mean = np.mean(baseline_waits)
         baseline_max = np.max(baseline_waits)
-        stats_text = f'Baseline: Mean={baseline_mean:.1f}s, Max={baseline_max:.1f}s'
+        stats_lines = [f'Baseline: Mean={baseline_mean:.1f}s, Max={baseline_max:.1f}s']
         
         if improved_waits:
             improved_mean = np.mean(improved_waits)
             improved_max = np.max(improved_waits)
             improvement_pct = ((baseline_max - improved_max) / baseline_max * 100) if baseline_max > 0 else 0
-            stats_text += f'\nImproved: Mean={improved_mean:.1f}s, Max={improved_max:.1f}s'
-            stats_text += f'\nMax Reduction: {improvement_pct:.1f}%'
+            stats_lines.append(f'{improved_label}: Mean={improved_mean:.1f}s, Max={improved_max:.1f}s')
+            stats_lines.append(f'Max Reduction: {improvement_pct:.1f}%')
         
-        ax.text(
-            0.02, 0.98, stats_text,
-            transform=ax.transAxes,
+        fig.text(
+            0.01, 0.99,
+            "\n".join(stats_lines),
             ha='left', va='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+            bbox=dict(boxstyle='round', facecolor='white', alpha=0.85),
             fontsize=10, family='monospace'
         )
     
     # Formatting
-    ax.set_xlabel('Waiting Time (seconds)', fontsize=12)
+    ax.set_xlabel('Weighted Waiting Time (seconds)', fontsize=12)
     ax.set_ylabel('Frequency', fontsize=12)
-    ax.set_title(f'Waiting Time Distribution: Baseline vs Improved ({city_name.title()})',
+    ax.set_title(f'Waiting Time Distribution: Baseline vs {improved_label} ({city_name.title()})',
                  fontsize=14, fontweight='bold')
-    ax.legend(loc='upper right', fontsize=11)
+    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), borderaxespad=0, fontsize=11)
+    # Optional y-limit to avoid very tall bars dominating the view
+    all_counts = base_counts if imp_counts is None else np.concatenate([base_counts, imp_counts])
+    if all_counts.size > 0:
+        median_c = np.median(all_counts)
+        p95_c = np.percentile(all_counts, 95)
+        max_c = all_counts.max()
+        # If a few bins dominate, cap at 1.2 * p95 to improve readability
+        if median_c > 0 and max_c > 5 * median_c:
+            ax.set_ylim(top=1.2 * max(p95_c, median_c))
     ax.grid(True, alpha=0.3, axis='y')
     
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 0.82, 0.95])
     
     # Save
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)

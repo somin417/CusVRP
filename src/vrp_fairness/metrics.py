@@ -64,6 +64,8 @@ def calculate_route_metrics(
     waiting_times = {}
     
     current_time = 0.0  # Departure time from depot is 0
+    total_duration_calc = 0.0
+    total_distance_calc = 0.0  # Not available from time_matrix; keep 0 unless provided
     
     for i in range(len(stop_ids) - 1):
         from_stop = stop_ids[i]
@@ -72,6 +74,7 @@ def calculate_route_metrics(
         # Travel time
         travel_time = time_matrix.get((from_stop, to_stop), 0)
         current_time += travel_time
+        total_duration_calc += travel_time
         
         # If not depot, record arrival and add service time
         if to_stop != depot_id:
@@ -83,14 +86,19 @@ def calculate_route_metrics(
             # Add service time
             service_time = stops_dict.get(to_stop, {}).get("service_time", 300)
             current_time += service_time
+            total_duration_calc += service_time
+    
+    # Use computed duration if route does not carry totals
+    total_duration = route.get("total_duration", total_duration_calc)
+    total_distance = route.get("total_distance", total_distance_calc)
     
     return RouteMetrics(
         vehicle_id=route.get("vehicle_id", 0),
         stop_ids=stop_ids,
         arrival_times=arrival_times,
         waiting_times=waiting_times,
-        total_duration=route.get("total_duration", 0),
-        total_distance=route.get("total_distance", 0.0)
+        total_duration=total_duration,
+        total_distance=total_distance
     )
 
 
@@ -119,7 +127,9 @@ def calculate_solution_metrics(
     all_stop_ids = set()
     
     for route in routes:
-        route_metrics = calculate_route_metrics(route, stops_dict, time_matrix, depot_id)
+        # Use route-specific depot if available (multi-depot support)
+        route_depot_id = route.get("dc_id", depot_id)
+        route_metrics = calculate_route_metrics(route, stops_dict, time_matrix, route_depot_id)
         route_durations.append(route_metrics.total_duration)
         total_distance += route_metrics.total_distance
         total_duration += route_metrics.total_duration
