@@ -8,7 +8,7 @@ Outputs:
   - compare_scores.csv: Z1, Z2, Z3 (MAD), Z per method
   - compare_metrics.csv: key metrics deltas vs baseline
   - compare_wait_panels.png: four-panel waiting-time comparison (bars + lines)
-  - compare_wait_panels.html (if plotly installed)
+  - compare_wait_panels.png
 
 Notes:
   - Runs three experiments sequentially (baseline, local, proposed) using
@@ -40,6 +40,7 @@ from src.vrp_fairness.objectives import (
 )
 from src.vrp_fairness.osrm_provider import create_osrm_providers
 from src.vrp_fairness.inavi import iNaviCache
+from scripts.utils.plotting_utils import calc_bins, smooth_curve
 
 try:
     import plotly.graph_objects as go
@@ -124,82 +125,9 @@ def calc_scores(
     }
 
 
-def _calc_bins(*series: List[float]) -> np.ndarray:
-    combined = []
-    for s in series:
-        combined.extend(s)
-    if not combined:
-        return np.array([0, 1])
-    max_wait = max(combined)
-    bin_count = min(60, max(20, len(combined) // 3))
-    return np.linspace(0, max_wait * 1.05, bin_count)
-
-
-def _smooth_curve(x: np.ndarray, y: np.ndarray, num_points: int = 200) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Create smooth curve from discrete points using interpolation.
-    Uses scipy.interpolate.UnivariateSpline if available, otherwise numpy interpolation.
-    
-    Args:
-        x: X coordinates (bin centers)
-        y: Y coordinates (counts)
-        num_points: Number of points for smooth curve
-    
-    Returns:
-        (x_smooth, y_smooth): Smooth curve coordinates
-    """
-    if len(x) == 0 or len(y) == 0:
-        return x, y
-    
-    if len(x) == 1:
-        # Single point - return as is
-        return x, y
-    
-    # Filter out zero counts at edges for better smoothing
-    # Keep all non-zero points and at least first/last point
-    mask = np.ones(len(y), dtype=bool)
-    if len(y) > 2:
-        # Keep first and last, filter middle zeros
-        for i in range(1, len(y) - 1):
-            if y[i] == 0 and y[i-1] == 0 and y[i+1] == 0:
-                mask[i] = False
-    
-    x_filtered = x[mask]
-    y_filtered = y[mask]
-    
-    if len(x_filtered) < 2:
-        # Not enough points for interpolation
-        return x, y
-    
-    try:
-        # Try scipy UnivariateSpline (best for histogram smoothing)
-        from scipy.interpolate import UnivariateSpline
-        # s parameter controls smoothness: higher = smoother, 0 = exact fit
-        # Use len(y) as smoothing factor to balance smoothness vs accuracy
-        s = max(1, len(y_filtered) * 0.5)
-        spline = UnivariateSpline(x_filtered, y_filtered, s=s, k=min(3, len(x_filtered) - 1))
-        x_smooth = np.linspace(x[0], x[-1], num_points)
-        y_smooth = spline(x_smooth)
-        # Ensure non-negative values (counts can't be negative)
-        y_smooth = np.maximum(y_smooth, 0)
-        return x_smooth, y_smooth
-    except ImportError:
-        # Fallback to numpy interpolation
-        try:
-            from scipy.interpolate import interp1d
-            # Use cubic interpolation if enough points, otherwise linear
-            kind = 'cubic' if len(x_filtered) >= 4 else 'linear'
-            interp_func = interp1d(x_filtered, y_filtered, kind=kind, bounds_error=False, fill_value=0)
-            x_smooth = np.linspace(x[0], x[-1], num_points)
-            y_smooth = interp_func(x_smooth)
-            y_smooth = np.maximum(y_smooth, 0)
-            return x_smooth, y_smooth
-        except (ImportError, ValueError):
-            # Final fallback: use numpy with simple linear interpolation
-            x_smooth = np.linspace(x[0], x[-1], num_points)
-            y_smooth = np.interp(x_smooth, x_filtered, y_filtered)
-            y_smooth = np.maximum(y_smooth, 0)
-            return x_smooth, y_smooth
+# Use common utilities from plotting_utils
+_calc_bins = calc_bins
+_smooth_curve = smooth_curve
 
 
 def plot_wait_panels(
@@ -221,7 +149,7 @@ def plot_wait_panels(
     Each panel overlays a line through bar centers for quick distribution reading.
     Frequencies are weighted by households (weights), x-axis is raw waiting time.
     """
-    bins = _calc_bins(baseline_waits, local_waits, proposed_waits)
+    bins = calc_bins(baseline_waits, local_waits, proposed_waits)
     bin_width = bins[1] - bins[0] if len(bins) > 1 else 1.0
     centers = bins[:-1] + bin_width / 2
     bar_width = bin_width * 0.8
@@ -258,7 +186,7 @@ def plot_wait_panels(
         panel_cap = global_cap
         ax.bar(centers, counts, width=bar_width, color=colors[title], alpha=0.75, edgecolor="white", linewidth=0.7)
         # Add smooth curve only (no original points)
-        x_smooth, y_smooth = _smooth_curve(centers, counts)
+        x_smooth, y_smooth = smooth_curve(centers, counts)
         if panel_cap is not None:
             y_smooth = np.minimum(y_smooth, panel_cap)
         ax.plot(x_smooth, y_smooth, color=colors[title], linewidth=2.0, linestyle="-", alpha=0.9)
@@ -281,7 +209,7 @@ def plot_wait_panels(
     for name, counts, offs in series:
         axc.bar(centers + offs, counts, width=bar_width / 3, color=colors[name], alpha=0.75, edgecolor="white", linewidth=0.7, label=name)
         # Add smooth curve only (no original points)
-        x_smooth, y_smooth = _smooth_curve(centers, counts)
+        x_smooth, y_smooth = smooth_curve(centers, counts)
         # Use shared padded cap for combined panel as well
         local_cap = global_cap
         if local_cap is not None:
@@ -307,26 +235,10 @@ def plot_wait_panels(
 
 
 def save_wait_hist_interactive(out_path: Path, city: str, baseline_waits, local_waits=None, proposed_waits=None):
-    if go is None:
-        logger.info("plotly not installed; skipping interactive histogram")
-        return
-    fig = go.Figure()
-    bins = len(_calc_bins(baseline_waits, local_waits or [], proposed_waits or [])) - 1
-    fig.add_trace(go.Histogram(x=baseline_waits, name="Baseline", opacity=0.6, marker_color="#4C78A8", nbinsx=bins))
-    if local_waits is not None:
-        fig.add_trace(go.Histogram(x=local_waits, name="Local", opacity=0.6, marker_color="#54A24B", nbinsx=bins))
-    if proposed_waits is not None:
-        fig.add_trace(go.Histogram(x=proposed_waits, name="ALSM (MAD)", opacity=0.6, marker_color="#F58518", nbinsx=bins))
-    fig.update_layout(
-        barmode="overlay",
-        title=f"Weighted Waiting Time Distribution ({city})",
-        xaxis_title="Weighted waiting time (seconds)",
-        yaxis_title="Count",
-        legend_title="Solution",
-        template="plotly_white",
-    )
-    fig.write_html(out_path, include_plotlyjs="cdn")
-    logger.info(f"Saved interactive histogram: {out_path}")
+    """Deprecated: HTML generation removed. Only PNG plots are generated now."""
+    # HTML generation removed - only PNG plots are generated
+    # Maps are the only place where HTML is generated
+    pass
 
 
 def main():
@@ -682,13 +594,8 @@ def main():
         local_weights=local_wts,
         proposed_weights=proposed_wts,
     )
-    save_wait_hist_interactive(
-        out_path=out / "compare_wait_panels.html",
-        city=args.city,
-        baseline_waits=baseline_waits,
-        local_waits=local_waits,
-        proposed_waits=proposed_waits,
-    )
+    # HTML generation removed - only PNG plots are generated
+    # Maps are the only place where HTML is generated
 
     # Persist plot-ready data so plots can be regenerated from CSV
     waits_path = out / "compare_wait_values.csv"

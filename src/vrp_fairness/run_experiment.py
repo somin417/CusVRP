@@ -18,7 +18,7 @@ from .assignment import assign_stops_to_depots, create_osrm_time_provider
 from .metrics import calculate_solution_metrics, metrics_to_dict
 from .local_search import FairnessLocalSearch
 from .plotting import plot_routes_baseline_vs_improved, plot_waiting_time_histograms, extract_waiting_times
-from .map_folium import save_route_map_html
+from .map_folium import save_route_map_html, save_multi_solution_map_html
 
 # Optional plotly for interactive plots
 try:
@@ -1040,7 +1040,11 @@ def main():
             trace_dir = Path(config.output_dir) / "traces"
             trace_dir.mkdir(parents=True, exist_ok=True)
             run_id = f"seed{config.seed}_n{len(stops)}_daejeon"
-            trace_file = trace_dir / f"{run_id}_proposed.csv"
+            # Use different filenames for CTS vs ALNS to avoid conflicts
+            if args.operator_mode == "cts":
+                trace_file = trace_dir / f"{run_id}_cts.csv"
+            else:
+                trace_file = trace_dir / f"{run_id}_alns.csv"
             # Trace fields depend on operator mode
             fieldnames = ["iter", "Z", "Z1", "Z2", "Z3", "accepted", "k_removed"]
             if args.operator_mode == "cts":
@@ -1053,11 +1057,16 @@ def main():
             logger.info(f"Trace saved: {trace_file}")
             
             # Save best solution backup if available
+            # CTS and ALNS both save best solutions, but with different filenames
             best_backup = debug.get("best_solution_backup")
             if best_backup:
                 backup_dir = Path(config.output_dir) / "best_solutions"
                 backup_dir.mkdir(parents=True, exist_ok=True)
-                backup_file = backup_dir / f"{run_id}_best.json"
+                # Use different filenames for CTS vs ALNS to avoid conflicts
+                if args.operator_mode == "cts":
+                    backup_file = backup_dir / f"{run_id}_cts_best.json"
+                else:
+                    backup_file = backup_dir / f"{run_id}_alns_best.json"
                 # Save solution with metadata
                 backup_data = {
                     "solution": best_backup["solution"],
@@ -1067,11 +1076,12 @@ def main():
                     "Z2": best_backup["Z2"],
                     "Z3": best_backup["Z3"],
                     "iteration": best_backup["iteration"],
-                    "run_id": run_id
+                    "run_id": run_id,
+                    "operator_mode": args.operator_mode
                 }
                 with open(backup_file, 'w') as f:
                     json.dump(backup_data, f, indent=2)
-                logger.info(f"Best solution backup saved: {backup_file} (iter {best_backup['iteration']}, Z={best_backup['Z']:.6f})")
+                logger.info(f"Best solution backup saved: {backup_file} (iter {best_backup['iteration']}, Z={best_backup['Z']:.6f}, mode={args.operator_mode})")
         else:
             improved = run_improvement(baseline, config, cache)
             proposed_debug = None
@@ -1085,26 +1095,34 @@ def main():
             improved = attach_wait_and_travel(improved, baseline.get("stops_dict", {}), tp, dp)
     except Exception as e:
         logger.warning(f"Failed to attach waiting/travel times: {e}")
-
+    
     # Save results
     save_results(baseline, improved, config, method=args.method, operator_mode=args.operator_mode)
     
     # Save proposed_debug if available (for comparison scripts)
+    # Use different filenames for CTS vs ALNS to avoid conflicts
     if proposed_debug is not None:
-        debug_file = Path(config.output_dir) / "proposed_debug.json"
+        if args.operator_mode == "cts":
+            debug_file = Path(config.output_dir) / "cts_debug.json"
+        else:
+            debug_file = Path(config.output_dir) / "proposed_debug.json"
         with open(debug_file, 'w') as f:
             json.dump(proposed_debug, f, indent=2)
         logger.info(f"Saved proposed debug info: {debug_file}")
     
     # Save proposed solution separately if method is proposed
+    # Use different filenames for CTS vs ALNS to avoid conflicts
     if args.method == "proposed" and improved:
         solution_dir = Path(config.output_dir) / "solutions"
         solution_dir.mkdir(parents=True, exist_ok=True)
         run_id = f"seed{config.seed}_n{len(stops)}_daejeon"
-        solution_file = solution_dir / f"{run_id}_proposed.json"
+        if args.operator_mode == "cts":
+            solution_file = solution_dir / f"{run_id}_cts.json"
+        else:
+            solution_file = solution_dir / f"{run_id}_alns.json"
         with open(solution_file, 'w') as f:
             json.dump(improved, f, indent=2)
-        logger.info(f"Proposed solution saved: {solution_file}")
+        logger.info(f"Proposed solution saved: {solution_file} (mode={args.operator_mode})")
     
     # Print Z scores comparison for all methods (skip if baseline-only or improved is None)
     if improved and args.method != "baseline":
@@ -1243,9 +1261,24 @@ def main():
                 for d in depots
             ]
             
-            save_route_map_html(
-                baseline_solution=baseline,
-                improved_solution=improved,
+            # Collect all available solutions
+            solutions = {"Baseline": baseline}
+            if improved:
+                solutions["Improved"] = improved
+            
+            # Try to load local solution if it exists
+            local_file = Path(config.output_dir) / "local.json"
+            if local_file.exists():
+                try:
+                    with open(local_file, 'r') as f:
+                        local = json.load(f)
+                        solutions["Local"] = local
+                except Exception as e:
+                    logger.debug(f"Could not load local solution: {e}")
+            
+            # Use multi-solution generator (works with 1+ solutions)
+            save_multi_solution_map_html(
+                solutions=solutions,
                 dcs=dcs_for_map,
                 stops_by_id=stops_by_id,
                 out_html=str(map_file),

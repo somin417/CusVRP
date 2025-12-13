@@ -13,9 +13,6 @@ from typing import Dict, Any, List, Optional
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import matplotlib.pyplot as plt
-import numpy as np
-
 from src.vrp_fairness.data import load_stops_from_gpkg
 from src.vrp_fairness.assignment import assign_stops_to_depots, create_osrm_time_provider
 from src.vrp_fairness.vroom_vrp import solve_multi_depot
@@ -33,183 +30,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def plot_Z3_comparison_histograms(
-    baseline_waits: List[float],
-    variance_waits: List[float],
-    mad_waits: List[float],
-    city_name: str,
-    output_path: Path,
-    baseline_weights: List[float] = None,
-    variance_weights: List[float] = None,
-    mad_weights: List[float] = None,
-) -> None:
-    """
-    Plot waiting time histograms comparing baseline, variance-improved, and MAD-improved.
-    
-    Args:
-        baseline_waits: Baseline raw waiting times (seconds)
-        variance_waits: Variance-improved raw waiting times (seconds)
-        mad_waits: MAD-improved raw waiting times (seconds)
-        city_name: City name for title
-        output_path: Output file path (without extension)
-        baseline_weights: Household weights for baseline (for frequency weighting)
-        variance_weights: Household weights for variance (for frequency weighting)
-        mad_weights: Household weights for MAD (for frequency weighting)
-    """
-    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
-    
-    if not baseline_waits:
-        ax.text(0.5, 0.5, 'No waiting time data available',
-                transform=ax.transAxes, ha='center', va='center', fontsize=14)
-        ax.set_title(f'Waiting Time Distribution ({city_name.title()})', fontsize=14)
-        plt.savefig(str(output_path) + ".png", format="png", dpi=150, bbox_inches='tight')
-        plt.close()
-        return
-    
-    # Determine bins (based on raw waiting times)
-    all_waits = baseline_waits + variance_waits + mad_waits
-    max_wait = max(all_waits) if all_waits else 1.0
-    bins = np.linspace(0, max_wait * 1.05, min(60, max(20, len(baseline_waits) // 3)))
-    bin_width = bins[1] - bins[0] if len(bins) > 1 else 1.0
-    centers = bins[:-1] + bin_width / 2
-    
-    # Use weights for frequency weighting (like compare_waiting_and_scores.py)
-    # x-axis: raw waiting time, y-axis: households-weighted frequency
-    base_counts, _ = np.histogram(baseline_waits, bins=bins, weights=baseline_weights)
-    var_counts, _ = np.histogram(variance_waits, bins=bins, weights=variance_weights)
-    mad_counts, _ = np.histogram(mad_waits, bins=bins, weights=mad_weights)
-    
-    # Side-by-side bars
-    offset = bin_width * 0.25
-    ax.bar(
-        centers - offset,
-        base_counts,
-        width=bin_width * 0.3,
-        alpha=0.75,
-        color='#4C78A8',
-        label='Baseline',
-        edgecolor='white',
-        linewidth=0.7
-    )
-    ax.bar(
-        centers,
-        var_counts,
-        width=bin_width * 0.3,
-        alpha=0.75,
-        color='#F58518',
-        label='Variance-Improved',
-        edgecolor='white',
-        linewidth=0.7
-    )
-    ax.bar(
-        centers + offset,
-        mad_counts,
-        width=bin_width * 0.3,
-        alpha=0.75,
-        color='#54A24B',
-        label='MAD-Improved',
-        edgecolor='white',
-        linewidth=0.7
-    )
-    
-    # Statistics text
-    stats_lines = []
-    if baseline_waits:
-        baseline_mean = np.mean(baseline_waits)
-        baseline_max = np.max(baseline_waits)
-        stats_lines.append(f'Baseline: Mean={baseline_mean:.1f}s, Max={baseline_max:.1f}s')
-    
-    if variance_waits:
-        var_mean = np.mean(variance_waits)
-        var_max = np.max(variance_waits)
-        var_improvement = ((baseline_max - var_max) / baseline_max * 100) if baseline_max > 0 else 0
-        stats_lines.append(f'Variance: Mean={var_mean:.1f}s, Max={var_max:.1f}s ({var_improvement:+.1f}%)')
-    
-    if mad_waits:
-        mad_mean = np.mean(mad_waits)
-        mad_max = np.max(mad_waits)
-        mad_improvement = ((baseline_max - mad_max) / baseline_max * 100) if baseline_max > 0 else 0
-        stats_lines.append(f'MAD: Mean={mad_mean:.1f}s, Max={mad_max:.1f}s ({mad_improvement:+.1f}%)')
-    
-    if stats_lines:
-        fig.text(
-            0.01, 0.99,
-            "\n".join(stats_lines),
-            ha='left', va='top',
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.85),
-            fontsize=10, family='monospace'
-        )
-    
-    # Formatting
-    ax.set_xlabel('Waiting Time (seconds)', fontsize=12)
-    ax.set_ylabel('Frequency (household-weighted)', fontsize=12)
-    ax.set_title(f'Waiting Time Distribution: Z3 Variance vs MAD Comparison ({city_name.title()})',
-                 fontsize=14, fontweight='bold')
-    ax.legend(loc='upper left', bbox_to_anchor=(1.02, 1.0), borderaxespad=0, fontsize=11)
-    
-    # Set y-limit with small padding (like compare_waiting_and_scores.py)
-    all_counts = np.concatenate([base_counts, var_counts, mad_counts])
-    if all_counts.size > 0:
-        max_c = all_counts.max()
-        if max_c > 0:
-            # Add 5% padding to max value
-            ax.set_ylim(top=max_c * 1.05)
-    
-    ax.grid(True, alpha=0.3, axis='y')
-    plt.tight_layout(rect=[0, 0, 0.85, 0.95])
-    
-    # Save PNG
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(str(output_path) + ".png", format="png", dpi=150, bbox_inches='tight')
-    plt.close()
-    logger.info(f"Saved waiting histogram: {output_path}.png")
-    
-    # Try to create interactive HTML with Plotly
-    try:
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
-        
-        fig_plotly = go.Figure()
-        
-        fig_plotly.add_trace(go.Histogram(
-            x=baseline_waits,
-            name='Baseline',
-            opacity=0.75,
-            marker_color='#4C78A8',
-            nbinsx=min(60, max(20, len(baseline_waits) // 3))
-        ))
-        
-        fig_plotly.add_trace(go.Histogram(
-            x=variance_waits,
-            name='Variance-Improved',
-            opacity=0.75,
-            marker_color='#F58518',
-            nbinsx=min(60, max(20, len(variance_waits) // 3))
-        ))
-        
-        fig_plotly.add_trace(go.Histogram(
-            x=mad_waits,
-            name='MAD-Improved',
-            opacity=0.75,
-            marker_color='#54A24B',
-            nbinsx=min(60, max(20, len(mad_waits) // 3))
-        ))
-        
-        fig_plotly.update_layout(
-            title=f'Waiting Time Distribution: Z3 Variance vs MAD Comparison ({city_name.title()})',
-            xaxis_title='Waiting Time (seconds)',
-            yaxis_title='Frequency (household-weighted)',
-            barmode='overlay',
-            hovermode='x unified',
-            width=1200,
-            height=600
-        )
-        
-        fig_plotly.write_html(str(output_path) + ".html")
-        logger.info(f"Saved interactive histogram: {output_path}.html")
-    except ImportError:
-        logger.info("Plotly not available, skipping interactive HTML generation")
-
+# Plot function removed - use generate_from_json.py for plots
+# Maps are the only visualization generated directly
 
 def run_experiment_with_Z3_mode(
     depots: list,
@@ -219,36 +41,66 @@ def run_experiment_with_Z3_mode(
     time_provider,
     distance_provider,
     config: Dict[str, Any],
-    use_MAD: bool = False
+    use_MAD: bool = False,
+    baseline_solution: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """
     Run proposed algorithm with either variance or MAD for Z3.
     
     Args:
         use_MAD: If True, use compute_Z3_MAD(); else use compute_Z3()
+        baseline_solution: Optional pre-computed baseline solution (to ensure Z1/Z2 consistency across Variance/MAD modes)
     
     Returns:
         Dictionary with solution and metrics
     """
+    # Generate baseline if not provided (to ensure consistency across Variance/MAD modes)
+    if baseline_solution is None:
+        logger.info("Generating baseline solution for consistency...")
+        baseline_solution = solve_multi_depot(
+            depots=depots,
+            vehicles_by_depot=vehicles,
+            stops_by_depot=stops_by_depot,
+            request_geometry=True
+        )
+        baseline_solution["depots"] = depots
+        baseline_solution["stops_dict"] = stops_by_id
+    
     # Temporarily patch compute_Z3 in proposed_algorithm
     import src.vrp_fairness.proposed_algorithm as pa_module
     import src.vrp_fairness.objectives as obj_module
+    from src.vrp_fairness import vroom_vrp
     
-    # Save original function
+    # Save original functions
     original_compute_Z3 = obj_module.compute_Z3
+    original_solve_multi_depot = vroom_vrp.solve_multi_depot
     
     # Create wrapper that uses MAD if requested
     if use_MAD:
         def compute_Z3_wrapper(waiting, stops_by_id):
             return compute_Z3_MAD(waiting, stops_by_id)
+        z3_mode = "MAD"
     else:
         def compute_Z3_wrapper(waiting, stops_by_id):
             return original_compute_Z3(waiting, stops_by_id)
+        z3_mode = "Variance"
     
-    # Patch the function in BOTH modules
+    # Patch compute_Z3 in BOTH modules
     # NOTE: proposed_algorithm imports compute_Z3 directly, so we need to patch both
     obj_module.compute_Z3 = compute_Z3_wrapper
     pa_module.compute_Z3 = compute_Z3_wrapper
+    logger.info(f"Patched compute_Z3 to use {z3_mode} mode for Z3 calculation")
+    
+    # Patch solve_multi_depot to return the pre-computed baseline
+    # This ensures Z1 and Z2 are identical across Variance/MAD modes
+    def solve_multi_depot_wrapper(*args, **kwargs):
+        """Return pre-computed baseline instead of generating new one."""
+        return baseline_solution
+    
+    vroom_vrp.solve_multi_depot = solve_multi_depot_wrapper
+    if hasattr(pa_module, 'solve_multi_depot'):
+        pa_module.solve_multi_depot = solve_multi_depot_wrapper
+    logger.info("Patched solve_multi_depot to use pre-computed baseline (ensures Z1/Z2 consistency)")
     
     try:
         # Run algorithm
@@ -266,7 +118,7 @@ def run_experiment_with_Z3_mode(
             distance_provider=distance_provider,
             normalize="baseline",
             use_distance_objective=config.get("use_distance", False),
-            enforce_capacity=False
+            enforce_capacity=config.get("enforce_capacity", True)
         )
         
         # Use best_objectives from debug_info if available (non-normalized RAW values computed by proposed_algorithm)
@@ -285,10 +137,10 @@ def run_experiment_with_Z3_mode(
                 # Force fallback by setting best_objectives to empty
                 best_objectives = {}
             else:
-                logger.info(f"Using RAW best objectives from proposed_algorithm debug_info:")
+                logger.info(f"Using RAW best objectives from proposed_algorithm debug_info (computed with {z3_mode}):")
                 logger.info(f"  Z1_improved (RAW)={Z1_improved:.2f}")
                 logger.info(f"  Z2_improved (RAW)={Z2_improved:.2f}")
-                logger.info(f"  Z3_improved (RAW)={Z3_improved:.2f}")
+                logger.info(f"  Z3_improved (RAW, {z3_mode})={Z3_improved:.2f}")
         
         # Fallback if best_objectives not available or invalid
         if not (best_objectives and all(k in best_objectives for k in ["Z1", "Z2", "Z3"]) and 
@@ -301,8 +153,9 @@ def run_experiment_with_Z3_mode(
             waiting_improved = compute_waiting_times(improved, baseline_stops_dict, time_provider)
             Z1_improved = compute_Z1(waiting_improved, baseline_stops_dict)
             Z2_improved = compute_Z2(improved, distance_provider, time_provider, config.get("use_distance", False))
-            Z3_improved = compute_Z3(waiting_improved, baseline_stops_dict)
-            logger.info(f"Recomputed RAW objectives: Z1={Z1_improved:.2f}, Z2={Z2_improved:.2f}, Z3={Z3_improved:.2f}")
+            # Use patched compute_Z3 (which uses the correct mode: Variance or MAD)
+            Z3_improved = obj_module.compute_Z3(waiting_improved, baseline_stops_dict)
+            logger.info(f"Recomputed RAW objectives (using {z3_mode}): Z1={Z1_improved:.2f}, Z2={Z2_improved:.2f}, Z3={Z3_improved:.2f}")
         
         # Use baseline objectives from debug_info for consistency with proposed_algorithm
         # These are the RAW baseline scores that will be used as normalizers (Z1*, Z2*, Z3*)
@@ -319,8 +172,8 @@ def run_experiment_with_Z3_mode(
             Z2_star = normalizers.get("Z2_star", Z2_baseline)
             Z3_star = normalizers.get("Z3_star", Z3_baseline)
             
-            logger.info(f"Using RAW baseline objectives from proposed_algorithm debug_info:")
-            logger.info(f"  Z1_baseline (RAW)={Z1_baseline:.2f}, Z2_baseline (RAW)={Z2_baseline:.2f}, Z3_baseline (RAW)={Z3_baseline:.2f}")
+            logger.info(f"Using RAW baseline objectives from proposed_algorithm debug_info (computed with {z3_mode}):")
+            logger.info(f"  Z1_baseline (RAW)={Z1_baseline:.2f}, Z2_baseline (RAW)={Z2_baseline:.2f}, Z3_baseline (RAW, {z3_mode})={Z3_baseline:.2f}")
             logger.info(f"  Z1_star={Z1_star:.2f}, Z2_star={Z2_star:.2f}, Z3_star={Z3_star:.2f}")
         else:
             # Fallback: recompute baseline (should not happen, but handle gracefully)
@@ -349,8 +202,9 @@ def run_experiment_with_Z3_mode(
             Z1_baseline = compute_Z1(waiting_baseline, baseline_stops_dict)
             Z2_baseline = compute_Z2(baseline, distance_provider, time_provider, config.get("use_distance", False))
             
-            # Use patched compute_Z3 (which is already patched in the wrapper)
-            Z3_baseline = compute_Z3(waiting_baseline, baseline_stops_dict)
+            # Use patched compute_Z3 (which uses the correct mode: Variance or MAD)
+            Z3_baseline = obj_module.compute_Z3(waiting_baseline, baseline_stops_dict)
+            logger.info(f"Recomputed baseline Z3 (using {z3_mode}): {Z3_baseline:.2f}")
             
             Z1_star, Z2_star, Z3_star = Z1_baseline, Z2_baseline, Z3_baseline
         
@@ -403,9 +257,13 @@ def run_experiment_with_Z3_mode(
             "debug_info": debug_info
         }
     finally:
-        # Restore original function in both modules
+        # Restore original functions
         obj_module.compute_Z3 = original_compute_Z3
         pa_module.compute_Z3 = original_compute_Z3
+        vroom_vrp.solve_multi_depot = original_solve_multi_depot
+        if hasattr(pa_module, 'solve_multi_depot'):
+            pa_module.solve_multi_depot = original_solve_multi_depot
+        logger.info("Restored original compute_Z3 and solve_multi_depot functions")
 
 
 def main():
@@ -427,7 +285,8 @@ def main():
         "alpha": 0.5,
         "beta": 0.3,
         "gamma": 0.2,
-        "use_distance": False
+        "use_distance": False,
+        "enforce_capacity": True  # Enable capacity constraints
     }
     
     print(f"\nConfiguration:")
@@ -436,8 +295,16 @@ def main():
     
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reuse", action="store_true", help="Reuse outputs/baseline.json and outputs/improved.json as baseline and MAD; train variance only")
+    parser.add_argument("--reuse", action="store_true", 
+                       help="Reuse outputs/baseline.json and outputs/improved.json (MAD solution) as baseline and MAD; train variance only with same configuration")
+    parser.add_argument("--no-capacity", action="store_true", 
+                       help="Disable capacity constraints (default: enabled)")
     args = parser.parse_args()
+    
+    # Override capacity setting if --no-capacity is specified
+    if args.no_capacity:
+        config["enforce_capacity"] = False
+        logger.info("Capacity constraints disabled via --no-capacity flag")
 
     def _build_from_baseline(baseline_path: Path):
         baseline_solution = json.loads(baseline_path.read_text())
@@ -477,24 +344,41 @@ def main():
 
     if args.reuse:
         # Reuse stored solutions and run only variance training
+        print("\n" + "=" * 80)
+        print("REUSE MODE: Using existing baseline.json and improved.json (MAD solution)")
+        print("=" * 80)
+        print(f"Capacity constraints: {'ENABLED' if config.get('enforce_capacity', True) else 'DISABLED'}")
+        
         baseline_path = Path("outputs") / "baseline.json"
         mad_path = Path("outputs") / "improved.json"
         if not baseline_path.exists() or not mad_path.exists():
-            raise FileNotFoundError("Need outputs/baseline.json and outputs/improved.json to reuse.")
+            raise FileNotFoundError(f"Need {baseline_path} and {mad_path} to reuse.")
 
+        logger.info(f"Loading baseline from: {baseline_path}")
         baseline_solution, depots, vehicles, stops_by_depot_dict, stops_by_id = _build_from_baseline(baseline_path)
 
-        # Compute MAD results from stored improved.json
+        # Use improved.json as MAD solution (no need to recompute)
+        logger.info(f"Loading MAD solution from: {mad_path}")
         mad_solution = json.loads(mad_path.read_text())
+        
+        # Only compute baseline scores for comparison (MAD scores are already in improved.json)
         cache = iNaviCache(approx_mode=False)
         time_provider, distance_provider = create_osrm_providers(depots, stops_by_id, cache)
-
+        
+        # Compute baseline scores for normalization
         waiting_base = compute_waiting_times(baseline_solution, stops_by_id, time_provider)
-        waiting_mad = compute_waiting_times(mad_solution, stops_by_id, time_provider)
-        Z1_b = compute_Z1(waiting_base, stops_by_id); Z2_b = compute_Z2(baseline_solution, distance_provider, time_provider, config.get("use_distance", False)); Z3_b = compute_Z3_MAD(waiting_base, stops_by_id)
-        Z1_m = compute_Z1(waiting_mad, stops_by_id); Z2_m = compute_Z2(mad_solution, distance_provider, time_provider, config.get("use_distance", False)); Z3_m = compute_Z3_MAD(waiting_mad, stops_by_id)
+        Z1_b = compute_Z1(waiting_base, stops_by_id)
+        Z2_b = compute_Z2(baseline_solution, distance_provider, time_provider, config.get("use_distance", False))
+        Z3_b = compute_Z3_MAD(waiting_base, stops_by_id)
         Z_b = compute_combined_Z(Z1_b, Z2_b, Z3_b, Z1_b, Z2_b, Z3_b, config["alpha"], config["beta"], config["gamma"])
+        
+        # Compute MAD improved scores for comparison
+        waiting_mad = compute_waiting_times(mad_solution, stops_by_id, time_provider)
+        Z1_m = compute_Z1(waiting_mad, stops_by_id)
+        Z2_m = compute_Z2(mad_solution, distance_provider, time_provider, config.get("use_distance", False))
+        Z3_m = compute_Z3_MAD(waiting_mad, stops_by_id)
         Z_m = compute_combined_Z(Z1_m, Z2_m, Z3_m, Z1_b, Z2_b, Z3_b, config["alpha"], config["beta"], config["gamma"])
+        
         results_MAD = {
             "baseline": {"Z1": Z1_b, "Z2": Z2_b, "Z3": Z3_b, "Z": Z_b},
             "improved": {"Z1": Z1_m, "Z2": Z2_m, "Z3": Z3_m, "Z": Z_m},
@@ -504,14 +388,24 @@ def main():
                 "Z3_pct": ((Z3_b - Z3_m)/Z3_b*100) if Z3_b>0 else 0,
                 "Z_pct": ((Z_b - Z_m)/Z_b*100) if Z_b>0 else 0,
             },
-            "solution": mad_solution,
-            "debug_info": {"baseline_solution": baseline_solution, "best_objectives": {"Z1": Z1_m, "Z2": Z2_m, "Z3": Z3_m}, "baseline_objectives": {"Z1": Z1_b, "Z2": Z2_b, "Z3": Z3_b}},
+            "solution": mad_solution,  # Use improved.json directly as MAD solution
+            "debug_info": {
+                "baseline_solution": baseline_solution,
+                "best_objectives": {"Z1": Z1_m, "Z2": Z2_m, "Z3": Z3_m},
+                "baseline_objectives": {"Z1": Z1_b, "Z2": Z2_b, "Z3": Z3_b}
+            },
         }
 
-        # Train variance only
+        # Train variance only (with same configuration as MAD, including capacity constraints)
+        print("\n" + "=" * 80)
+        print("EXPERIMENT: Training Variance solution (reusing MAD baseline)")
+        print("=" * 80)
+        logger.info(f"Running variance experiment with capacity constraints: {config.get('enforce_capacity', True)}")
+        # Use the same baseline_solution to ensure Z1/Z2 consistency
         results_variance = run_experiment_with_Z3_mode(
             depots, vehicles, stops_by_depot_dict, stops_by_id,
-            time_provider, distance_provider, config, use_MAD=False
+            time_provider, distance_provider, config, use_MAD=False,
+            baseline_solution=baseline_solution
         )
     else:
         # Original flow: build from GPKG and run both MAD and variance
@@ -630,9 +524,21 @@ def main():
         print("\n" + "=" * 80)
         print("EXPERIMENT 1: Using Z3 = MAD (Notion spec)")
         print("=" * 80)
+        # Generate baseline once and reuse for both MAD and Variance experiments
+        baseline_solution = solve_multi_depot(
+            depots=depots,
+            vehicles_by_depot=vehicles,
+            stops_by_depot=stops_by_depot_dict,
+            request_geometry=True
+        )
+        baseline_solution["depots"] = depots
+        baseline_solution["stops_dict"] = stops_by_id
+        logger.info("Generated shared baseline solution for MAD and Variance experiments")
+        
         results_MAD = run_experiment_with_Z3_mode(
             depots, vehicles, stops_by_depot_dict, stops_by_id,
-            time_provider, distance_provider, config, use_MAD=True
+            time_provider, distance_provider, config, use_MAD=True,
+            baseline_solution=baseline_solution
         )
         
         # Save MAD debug info to separate file to avoid conflicts
@@ -660,7 +566,8 @@ def main():
         print("=" * 80)
         results_variance = run_experiment_with_Z3_mode(
             depots, vehicles, stops_by_depot_dict, stops_by_id,
-            time_provider, distance_provider, config, use_MAD=False
+            time_provider, distance_provider, config, use_MAD=False,
+            baseline_solution=baseline_solution
         )
     else:
         print("\n" + "=" * 80)
@@ -669,9 +576,11 @@ def main():
         # Already have depots/vehicles/stops_by_depot_dict/stops_by_id from reuse branch
         cache = iNaviCache(approx_mode=False)
         time_provider, distance_provider = create_osrm_providers(depots, stops_by_id, cache)
+        # Use the same baseline_solution to ensure Z1/Z2 consistency
         results_variance = run_experiment_with_Z3_mode(
             depots, vehicles, stops_by_depot_dict, stops_by_id,
-            time_provider, distance_provider, config, use_MAD=False
+            time_provider, distance_provider, config, use_MAD=False,
+            baseline_solution=baseline_solution
         )
     
     # Save Variance debug info to separate file to avoid conflicts
@@ -748,6 +657,52 @@ def main():
     print(f"Results saved to: {output_file}")
     print("=" * 80)
     
+    # Save individual solutions (variance and MAD)
+    print("\n" + "-" * 80)
+    print("Saving individual solutions...")
+    print("-" * 80)
+    
+    # Save Variance solution
+    variance_solution_file = output_dir / "variance_solution.json"
+    variance_solution_to_save = results_variance["solution"].copy()
+    # Ensure depots and stops_dict are included for consistency
+    if "depots" not in variance_solution_to_save:
+        variance_solution_to_save["depots"] = depots
+    if "stops_dict" not in variance_solution_to_save:
+        variance_solution_to_save["stops_dict"] = stops_by_id
+    with open(variance_solution_file, 'w') as f:
+        json.dump(variance_solution_to_save, f, indent=2)
+    logger.info(f"Saved Variance solution: {variance_solution_file}")
+    
+    # Note: MAD solution is already in improved.json (or will be saved there), no need to duplicate
+    
+    # Save best solution backups (with iteration info and metadata)
+    if results_variance["debug_info"].get("best_solution_backup"):
+        variance_backup_file = output_dir / "variance_best_backup.json"
+        backup_data = results_variance["debug_info"]["best_solution_backup"].copy()
+        # Ensure solution has depots and stops_dict
+        if "solution" in backup_data:
+            if "depots" not in backup_data["solution"]:
+                backup_data["solution"]["depots"] = depots
+            if "stops_dict" not in backup_data["solution"]:
+                backup_data["solution"]["stops_dict"] = stops_by_id
+        with open(variance_backup_file, 'w') as f:
+            json.dump(backup_data, f, indent=2)
+        logger.info(f"Saved Variance best backup: {variance_backup_file} (iter {backup_data.get('iteration', 'unknown')}, Z={backup_data.get('Z', 'unknown'):.6f})")
+    
+    if results_MAD["debug_info"].get("best_solution_backup"):
+        mad_backup_file = output_dir / "mad_best_backup.json"
+        backup_data = results_MAD["debug_info"]["best_solution_backup"].copy()
+        # Ensure solution has depots and stops_dict
+        if "solution" in backup_data:
+            if "depots" not in backup_data["solution"]:
+                backup_data["solution"]["depots"] = depots
+            if "stops_dict" not in backup_data["solution"]:
+                backup_data["solution"]["stops_dict"] = stops_by_id
+        with open(mad_backup_file, 'w') as f:
+            json.dump(backup_data, f, indent=2)
+        logger.info(f"Saved MAD best backup: {mad_backup_file} (iter {backup_data.get('iteration', 'unknown')}, Z={backup_data.get('Z', 'unknown'):.6f})")
+    
     # Save scores to CSV (similar to compare_waiting_and_scores.py)
     import csv
     scores_file = output_dir / "compare_scores_z3.csv"
@@ -810,20 +765,8 @@ def main():
             w.writerow(["MAD", w_raw, wt])
     logger.info(f"Saved wait values for plotting: {waits_file}")
     
-    # Plot histograms
-    hist_output = Path("outputs") / "variance_vs_mad_wait_hist"
-    plot_Z3_comparison_histograms(
-        baseline_waits=baseline_waits,
-        variance_waits=variance_waits,
-        mad_waits=mad_waits,
-        city_name="daejeon",  # Could be configurable
-        output_path=hist_output,
-        baseline_weights=baseline_wts,
-        variance_weights=variance_wts,
-        mad_weights=mad_wts,
-    )
-    
-    print(f"Waiting time histograms saved to: {hist_output}.png (and .html if Plotly available)")
+    # Plot generation removed - use generate_from_json.py for plots
+    # Maps are the only visualization generated directly
     
     # Summary
     print("\n" + "=" * 80)
@@ -843,10 +786,6 @@ def main():
     3. Combined Z improvement:
        - Variance: {results_variance['improvement']['Z_pct']:+.1f}%
        - MAD:      {results_MAD['improvement']['Z_pct']:+.1f}%
-    
-    Recommendation:
-    - Use MAD (compute_Z3_MAD) to match Notion spec exactly
-    - Variance is acceptable as approximation but not spec-compliant
     """)
 
 

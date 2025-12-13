@@ -22,7 +22,6 @@ from src.vrp_fairness.objectives import (
 )
 from src.vrp_fairness.osrm_provider import create_osrm_providers
 from src.vrp_fairness.inavi import iNaviCache
-from src.vrp_fairness.plotting import plot_waiting_time_histograms
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -219,8 +218,10 @@ def plot_baseline_vs_alns(
             height=600
         )
         
-        fig_plotly.write_html(str(output_path) + ".html")
-        logger.info(f"Saved interactive histogram: {output_path}.html")
+        # HTML generation removed - only PNG plots are generated
+        # Maps are the only place where HTML is generated
+        # fig_plotly.write_html(str(output_path) + ".html")
+        # logger.info(f"Saved interactive histogram: {output_path}.html")
     except ImportError:
         logger.info("Plotly not available, skipping interactive HTML")
 
@@ -339,8 +340,8 @@ def main():
     )
     
     print(f"Plot saved to: {output_path}.png")
-    if (output_path.parent / (output_path.name + ".html")).exists():
-        print(f"Interactive plot: {output_path}.html")
+    # HTML generation removed - only PNG plots are generated
+    # Maps are the only place where HTML is generated
 
 
 if __name__ == "__main__":

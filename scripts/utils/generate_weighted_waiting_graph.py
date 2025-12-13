@@ -26,7 +26,6 @@ import numpy as np
 
 try:
     import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
@@ -271,8 +270,10 @@ def plot_weighted_waiting_interactive(
         height=600
     )
     
-    fig.write_html(str(output_path) + ".html", include_plotlyjs="cdn")
-    logger.info(f"Saved interactive histogram: {output_path}.html")
+    # HTML generation removed - only PNG plots are generated
+    # Maps are the only place where HTML is generated
+    # fig.write_html(str(output_path) + ".html", include_plotlyjs="cdn")
+    # logger.info(f"Saved interactive histogram: {output_path}.html")
 
 
 def main():
@@ -390,8 +391,8 @@ def main():
     logger.info(f"Total stops: {sum(len(waits) for waits in weighted_by_method.values())}")
     logger.info(f"Output files:")
     logger.info(f"  - {output_path}.png")
-    if PLOTLY_AVAILABLE:
-        logger.info(f"  - {output_path}.html")
+    # HTML generation removed - only PNG plots are generated
+    # Maps are the only place where HTML is generated
     logger.info(f"  - {hist_data_path}")
     logger.info(f"  - {weighted_values_path}")
 

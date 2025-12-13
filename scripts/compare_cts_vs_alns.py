@@ -11,7 +11,6 @@ This script follows the same pipeline as compare_waiting_and_scores.py:
 Outputs:
   - cts_vs_alns_scores.csv: Z1, Z2, Z3 (MAD), Z for baseline, ALNS, CTS
   - cts_vs_alns_wait_panels.png: four-panel waiting-time comparison
-  - cts_vs_alns_wait_panels.html (if plotly installed)
 """
 
 import argparse
@@ -37,6 +36,7 @@ from src.vrp_fairness.objectives import (
 )
 from src.vrp_fairness.osrm_provider import create_osrm_providers
 from src.vrp_fairness.inavi import iNaviCache
+from scripts.utils.plotting_utils import calc_bins, smooth_curve
 
 try:
     import plotly.graph_objects as go
@@ -121,61 +121,7 @@ def calc_scores(
     }
 
 
-def _calc_bins(*series: List[float]) -> np.ndarray:
-    """Calculate bins for histogram from multiple data series."""
-    combined = []
-    for s in series:
-        combined.extend(s)
-    if not combined:
-        return np.array([0, 1])
-    max_wait = max(combined)
-    bin_count = min(60, max(20, len(combined) // 3))
-    return np.linspace(0, max_wait * 1.05, bin_count)
-
-
-def _smooth_curve(x: np.ndarray, y: np.ndarray, num_points: int = 200) -> Tuple[np.ndarray, np.ndarray]:
-    """Create smooth curve from discrete points using interpolation."""
-    if len(x) == 0 or len(y) == 0:
-        return x, y
-    
-    if len(x) == 1:
-        return x, y
-    
-    # Filter out zero counts at edges for better smoothing
-    mask = np.ones(len(y), dtype=bool)
-    if len(y) > 2:
-        for i in range(1, len(y) - 1):
-            if y[i] == 0 and y[i-1] == 0 and y[i+1] == 0:
-                mask[i] = False
-    
-    x_filtered = x[mask]
-    y_filtered = y[mask]
-    
-    if len(x_filtered) < 2:
-        return x, y
-    
-    try:
-        from scipy.interpolate import UnivariateSpline
-        s = max(1, len(y_filtered) * 0.5)
-        spline = UnivariateSpline(x_filtered, y_filtered, s=s, k=min(3, len(x_filtered) - 1))
-        x_smooth = np.linspace(x[0], x[-1], num_points)
-        y_smooth = spline(x_smooth)
-        y_smooth = np.maximum(y_smooth, 0)
-        return x_smooth, y_smooth
-    except ImportError:
-        try:
-            from scipy.interpolate import interp1d
-            kind = 'cubic' if len(x_filtered) >= 4 else 'linear'
-            interp_func = interp1d(x_filtered, y_filtered, kind=kind, bounds_error=False, fill_value=0)
-            x_smooth = np.linspace(x[0], x[-1], num_points)
-            y_smooth = interp_func(x_smooth)
-            y_smooth = np.maximum(y_smooth, 0)
-            return x_smooth, y_smooth
-        except (ImportError, ValueError):
-            x_smooth = np.linspace(x[0], x[-1], num_points)
-            y_smooth = np.interp(x_smooth, x_filtered, y_filtered)
-            y_smooth = np.maximum(y_smooth, 0)
-            return x_smooth, y_smooth
+# Use common utilities from plotting_utils (no aliases needed)
 
 
 def plot_wait_panels(out_path: Path, city: str, baseline_waits, alns_waits, cts_waits):
@@ -187,7 +133,7 @@ def plot_wait_panels(out_path: Path, city: str, baseline_waits, alns_waits, cts_
       - Combined comparison
     Each panel overlays smooth curves through bar centers.
     """
-    bins = _calc_bins(baseline_waits, alns_waits, cts_waits)
+    bins = calc_bins(baseline_waits, alns_waits, cts_waits)
     bin_width = bins[1] - bins[0] if len(bins) > 1 else 1.0
     centers = bins[:-1] + bin_width / 2
     bar_width = bin_width * 0.8
@@ -224,7 +170,7 @@ def plot_wait_panels(out_path: Path, city: str, baseline_waits, alns_waits, cts_
         panel_cap = global_cap
         ax.bar(centers, counts, width=bar_width, color=colors[title], alpha=0.75, edgecolor="white", linewidth=0.7)
         # Add smooth curve only
-        x_smooth, y_smooth = _smooth_curve(centers, counts)
+        x_smooth, y_smooth = smooth_curve(centers, counts)
         if panel_cap is not None:
             y_smooth = np.minimum(y_smooth, panel_cap)
         ax.plot(x_smooth, y_smooth, color=colors[title], linewidth=2.0, linestyle="-", alpha=0.9)
@@ -246,7 +192,7 @@ def plot_wait_panels(out_path: Path, city: str, baseline_waits, alns_waits, cts_
     for name, counts, offs in series:
         axc.bar(centers + offs, counts, width=bar_width / 3, color=colors[name], alpha=0.75, edgecolor="white", linewidth=0.7, label=name)
         # Add smooth curve only
-        x_smooth, y_smooth = _smooth_curve(centers, counts)
+        x_smooth, y_smooth = smooth_curve(centers, counts)
         # Use shared padded cap for combined panel as well
         local_cap = global_cap
         if local_cap is not None:
@@ -270,27 +216,10 @@ def plot_wait_panels(out_path: Path, city: str, baseline_waits, alns_waits, cts_
 
 
 def save_wait_hist_interactive(out_path: Path, city: str, baseline_waits, alns_waits=None, cts_waits=None):
-    """Save interactive histogram using Plotly."""
-    if go is None:
-        logger.info("plotly not installed; skipping interactive histogram")
-        return
-    fig = go.Figure()
-    bins = len(_calc_bins(baseline_waits, alns_waits or [], cts_waits or [])) - 1
-    fig.add_trace(go.Histogram(x=baseline_waits, name="Baseline", opacity=0.6, marker_color="#4C78A8", nbinsx=bins))
-    if alns_waits is not None:
-        fig.add_trace(go.Histogram(x=alns_waits, name="ALNS (fixed)", opacity=0.6, marker_color="#54A24B", nbinsx=bins))
-    if cts_waits is not None:
-        fig.add_trace(go.Histogram(x=cts_waits, name="CTS", opacity=0.6, marker_color="#F58518", nbinsx=bins))
-    fig.update_layout(
-        barmode="overlay",
-        title=f"Weighted Waiting Time Distribution ({city})",
-        xaxis_title="Weighted waiting time (seconds)",
-        yaxis_title="Count",
-        legend_title="Solution",
-        template="plotly_white",
-    )
-    fig.write_html(out_path, include_plotlyjs="cdn")
-    logger.info(f"Saved interactive histogram: {out_path}")
+    """Deprecated: HTML generation removed. Only PNG plots are generated now."""
+    # HTML generation removed - only PNG plots are generated
+    # Maps are the only place where HTML is generated
+    pass
 
 
 def main():
@@ -301,7 +230,7 @@ def main():
     p.add_argument("--num-dcs", type=int, default=3)
     p.add_argument("--city", default="daejeon")
     p.add_argument("--demand-field", default="A26")
-    p.add_argument("--eps", type=float, default=0.10)
+    p.add_argument("--eps", type=float, default=0.30, help="Cost budget tolerance (default: 0.30 = 130% of baseline Z2)")
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--use-distance-objective", action="store_true")
@@ -310,6 +239,7 @@ def main():
     p.add_argument("--gamma", type=float, default=0.2)
     p.add_argument("--output-dir", default="outputs", help="Output directory (should match compare_waiting_and_scores.py to reuse ALNS results)")
     p.add_argument("--force-rerun-alns", action="store_true", help="Force rerun ALNS even if results exist")
+    p.add_argument("--cts-only", action="store_true", help="Run CTS only (skip ALNS, requires baseline.json)")
     args = p.parse_args()
 
     out = Path(args.output_dir)
@@ -336,10 +266,8 @@ def main():
         baseline_file = out / "baseline.json"
         alns_debug_file = out / "proposed_debug.json"  # This file ONLY exists if ALNS was run
         
-        # Fallback to improved.json if solutions file not found
-        if alns_solution_file is None:
-            alns_solution_file = out / "improved.json"
-            logger.info("Will check improved.json for ALNS solution")
+        # Initialize alns_solution_file (default to improved.json)
+        alns_solution_file = out / "improved.json"
         
         # Verify that proposed_debug.json exists (guarantees ALNS was run)
         if baseline_file.exists() and alns_debug_file.exists() and alns_solution_file.exists():
@@ -400,8 +328,24 @@ def main():
             logger.info(f"Missing files for ALNS reuse: {', '.join(missing)}")
             logger.info("Will run ALNS from scratch")
     
-    # If we don't have ALNS results, run ALNS first (same as compare_waiting_and_scores.py)
-    if baseline is None or alns_solution is None or args.force_rerun_alns:
+    # If --cts-only, skip ALNS and use baseline.json only
+    if args.cts_only:
+        if baseline is None:
+            baseline_file = out / "baseline.json"
+            if not baseline_file.exists():
+                logger.error("--cts-only requires baseline.json to exist")
+                sys.exit(1)
+            baseline = load_json(baseline_file)
+            depots = baseline.get("depots", [])
+            if not depots:
+                raise RuntimeError("No depots found in baseline.json")
+            logger.info("Using baseline.json for CTS-only run")
+        # Skip ALNS, go directly to CTS
+        alns_solution = None
+        alns_debug = None
+    
+    # If we don't have ALNS results and not --cts-only, run ALNS first (same as compare_waiting_and_scores.py)
+    elif baseline is None or alns_solution is None or args.force_rerun_alns:
         logger.info("Running ALNS (fixed) from scratch...")
         
         # Common base command parts
@@ -548,17 +492,14 @@ def main():
     
     subprocess.check_call(cmd_cts)
     
-    # Load CTS results from main output directory (CTS saves to cts_solution.json)
+    # Load CTS results from main output directory
+    # CTS saves to cts_solution.json and cts_debug.json (separate from ALNS files)
     cts_solution = load_json(out / "cts_solution.json")
-    cts_debug_file = out / "proposed_debug.json"  # CTS also creates proposed_debug.json
+    cts_debug_file = out / "cts_debug.json"  # CTS now saves directly to cts_debug.json
     cts_debug = None
     if cts_debug_file.exists():
         cts_debug = load_json(cts_debug_file)
-        # Rename CTS debug to dedicated file to avoid confusion with ALNS debug
-        cts_debug_file_main = out / "cts_debug.json"
-        with open(cts_debug_file_main, 'w') as f:
-            json.dump(cts_debug, f, indent=2)
-        logger.info(f"Saved CTS debug info to: {cts_debug_file_main}")
+        logger.info(f"Loaded CTS debug info from: {cts_debug_file}")
     
     # Ensure CTS solution has stops_dict and depots for consistency
     if "stops_dict" not in cts_solution:
@@ -790,13 +731,8 @@ def main():
         alns_weights=alns_wts,
         cts_weights=cts_wts,
     )
-    save_wait_hist_interactive(
-        out_path=out / "cts_vs_alns_wait_panels.html",
-        city=args.city,
-        baseline_waits=baseline_waits,
-        alns_waits=alns_waits,
-        cts_waits=cts_waits,
-    )
+        # HTML generation removed - only PNG plots are generated
+        # Maps are the only place where HTML is generated
     
     # Persist plot-ready data (like compare_waiting_and_scores.py)
     waits_path = out / "cts_vs_alns_wait_values.csv"

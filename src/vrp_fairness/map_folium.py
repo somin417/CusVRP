@@ -110,28 +110,29 @@ def extract_route_coordinates(
         # For now, always validate geometry matches stop order by checking first/last points
         normalized = normalize_geometry_to_latlon(route_geometry)
         if normalized and len(normalized) > 20:
-            # Quick validation: check if geometry endpoints match route endpoints
+            # Quick validation: check if geometry starts at DC and ends at DC (full round trip)
             stop_ids = route.get("ordered_stop_ids", [])
             if stop_ids and stops_by_id:
                 first_stop = stops_by_id.get(stop_ids[0])
                 last_stop = stops_by_id.get(stop_ids[-1])
                 if first_stop and last_stop:
-                    # Check if geometry starts/ends near first/last stops
+                    # Check if geometry starts at DC and ends at DC (round trip)
                     geom_start = normalized[0]
                     geom_end = normalized[-1]
-                    start_dist = ((geom_start[0] - first_stop["lat"])**2 + (geom_start[1] - first_stop["lon"])**2)**0.5
-                    end_dist = ((geom_end[0] - last_stop["lat"])**2 + (geom_end[1] - last_stop["lon"])**2)**0.5
+                    start_to_dc = ((geom_start[0] - dc.lat)**2 + (geom_start[1] - dc.lon)**2)**0.5
+                    end_to_dc = ((geom_end[0] - dc.lat)**2 + (geom_end[1] - dc.lon)**2)**0.5
                     
-                    # If geometry doesn't match stop locations, skip it
-                    if start_dist > 0.01 or end_dist > 0.01:  # ~1km threshold
-                        logger.warning(f"Geometry endpoints don't match route stops, recalculating from stop order")
+                    # VROOM geometry should start and end at DC (round trip: DC -> stops -> DC)
+                    # If geometry doesn't start/end at DC, it may be incomplete
+                    if start_to_dc > 0.01 or end_to_dc > 0.01:  # ~1km threshold
+                        logger.warning(f"Geometry doesn't start/end at DC (start_dist={start_to_dc:.4f}, end_dist={end_to_dc:.4f}), recalculating from stop order")
                         route_geometry = None  # Force fallback to stop order
                     else:
-                        logger.info(f"DRAWING GEOMETRY route-level polyline points={len(normalized)}")
+                        logger.info(f"DRAWING GEOMETRY route-level polyline points={len(normalized)} (includes DC->stops->DC)")
                         return normalized
             
             if normalized and len(normalized) > 20:
-                logger.info(f"DRAWING GEOMETRY route-level polyline points={len(normalized)}")
+                logger.info(f"DRAWING GEOMETRY route-level polyline points={len(normalized)} (includes DC->stops->DC)")
                 return normalized
         elif normalized:
             logger.warning(f"Route geometry has only {len(normalized)} points, trying legs")
@@ -147,10 +148,41 @@ def extract_route_coordinates(
                 normalized = normalize_geometry_to_latlon(leg_geom)
                 if normalized:
                     total_points += len(normalized)
-                    all_leg_coords.extend(normalized)
+                    # Skip first point if it's duplicate of previous leg's last point
+                    if all_leg_coords and len(normalized) > 1:
+                        last_coord = all_leg_coords[-1]
+                        first_coord = normalized[0]
+                        if abs(last_coord[0] - first_coord[0]) < 1e-6 and abs(last_coord[1] - first_coord[1]) < 1e-6:
+                            all_leg_coords.extend(normalized[1:])
+                        else:
+                            all_leg_coords.extend(normalized)
+                    else:
+                        all_leg_coords.extend(normalized)
+        
+        # Verify that legs include return to DC (last leg should be last_stop -> DC)
+        if all_leg_coords and stop_ids:
+            # Check if last leg ends at DC
+            last_leg = route["legs"][-1] if route["legs"] else None
+            if last_leg:
+                last_leg_to = last_leg.get("to", "")
+                # Check if last leg goes to depot (could be depot name or DC id)
+                ends_at_dc = (last_leg_to == dc.id or 
+                             last_leg_to == dc.get("name", "") or
+                             last_leg_to in ["depot", "Depot", "DC"] or
+                             (all_leg_coords and 
+                              abs(all_leg_coords[-1][0] - dc.lat) < 0.01 and 
+                              abs(all_leg_coords[-1][1] - dc.lon) < 0.01))
+                
+                if not ends_at_dc:
+                    logger.warning(f"Per-leg geometry doesn't end at DC (last leg to={last_leg_to}), will add DC return in fallback")
+                    # Don't return early, fall through to add DC return
+                else:
+                    if total_points > 20:
+                        logger.info(f"DRAWING GEOMETRY per-leg polyline points={total_points} (includes DC->stops->DC)")
+                        return all_leg_coords
         
         if total_points > 20:
-            logger.info(f"DRAWING GEOMETRY per-leg polyline points={total_points}")
+            logger.info(f"DRAWING GEOMETRY per-leg polyline points={total_points} (includes DC->stops->DC)")
             return all_leg_coords
         elif total_points > 0:
             logger.warning(f"Per-leg geometry has only {total_points} points, using fallback")
@@ -211,21 +243,8 @@ def extract_route_coordinates(
                             if abs(coord[0] - stop_coord[0]) > 1e-8 or abs(coord[1] - stop_coord[1]) > 1e-8:
                                 coordinates.append(coord)
                 
-                # Always add interpolated points if distance is large (for visual continuity)
-                prev_coord = coordinates[-1] if coordinates else prev_coord
-                dist = ((stop_coord[0] - prev_coord[0])**2 + (stop_coord[1] - prev_coord[1])**2)**0.5
-                # If distance is large (>0.0005 degrees ~50m), add intermediate points
-                if dist > 0.0005:
-                    # Add intermediate points for visual continuity (more points for longer distances)
-                    num_interp = min(8, max(3, int(dist / 0.0002)))  # 3-8 points based on distance
-                    for i in range(1, num_interp + 1):
-                        ratio = i / (num_interp + 1)
-                        interp_lat = prev_coord[0] + (stop_coord[0] - prev_coord[0]) * ratio
-                        interp_lon = prev_coord[1] + (stop_coord[1] - prev_coord[1]) * ratio
-                        coordinates.append((interp_lat, interp_lon))
-                
-                # ALWAYS insert exact stop coordinate (ensures visual connection)
-                if not coordinates or coordinates[-1] != stop_coord:
+                # Add exact stop coordinate (OSRM polyline already provides smooth path)
+                if not coordinates or abs(coordinates[-1][0] - stop_coord[0]) > 1e-6 or abs(coordinates[-1][1] - stop_coord[1]) > 1e-6:
                     coordinates.append(stop_coord)
             
             # Return to DC
@@ -250,27 +269,8 @@ def extract_route_coordinates(
                             continue
                         coordinates.append(coord)
             
-            # Add interpolated points if distance to DC is large
-            if coordinates:
-                prev_coord = coordinates[-1]
-                dist_to_dc = ((dc.lat - prev_coord[0])**2 + (dc.lon - prev_coord[1])**2)**0.5
-                if dist_to_dc > 0.0005:  # Lower threshold for better continuity
-                    num_interp = min(8, max(3, int(dist_to_dc / 0.0002)))
-                    for i in range(1, num_interp + 1):
-                        ratio = i / (num_interp + 1)
-                        interp_lat = prev_coord[0] + (dc.lat - prev_coord[0]) * ratio
-                        interp_lon = prev_coord[1] + (dc.lon - prev_coord[1]) * ratio
-                        coordinates.append((interp_lat, interp_lon))
-            
-            # ALWAYS end at DC (ensures route returns to depot)
-            if not coordinates or coordinates[-1] != (dc.lat, dc.lon):
-                coordinates.append((dc.lat, dc.lon))
-        
-        # Ensure route ends at DC
-        if coordinates:
-            last_coord = coordinates[-1]
-            dist_to_dc = ((last_coord[0] - dc.lat)**2 + (last_coord[1] - dc.lon)**2)**0.5
-            if dist_to_dc > 0.001:  # Not close to DC
+            # End at DC (OSRM polyline already provides smooth path)
+            if coordinates and (abs(coordinates[-1][0] - dc.lat) > 1e-6 or abs(coordinates[-1][1] - dc.lon) > 1e-6):
                 coordinates.append((dc.lat, dc.lon))
     
     # Fallback: build from stop sequence (straight lines)
@@ -599,7 +599,7 @@ def save_route_map_html(
     
     # Add layer control based on toggle_mode
     if toggle_mode == "radio":
-        # Try GroupedLayerControl for exclusive toggle
+        # Use GroupedLayerControl for exclusive toggle
         try:
             from folium.plugins import GroupedLayerControl
             
@@ -615,80 +615,9 @@ def save_route_map_html(
             ).add_to(m)
             logger.info("Using GroupedLayerControl for exclusive route toggle")
         except (ImportError, AttributeError):
-            # Fallback: Use JS to make baseline/improved mutually exclusive
-            logger.info("GroupedLayerControl not available, using JS fallback for exclusive toggle")
+            # Fallback: regular layer control (not exclusive)
+            logger.warning("GroupedLayerControl not available, using regular LayerControl (not exclusive)")
             folium.LayerControl(collapsed=False).add_to(m)
-            
-            # Inject JS to make baseline/improved/both mutually exclusive
-            base_name = fg_base.get_name()
-            impr_name = fg_impr.get_name() if improved_solution else None
-            both_name = fg_both.get_name() if improved_solution else None
-            
-            js_code = f"""
-            <script>
-            (function() {{
-                function setupExclusiveToggle() {{
-                    var control = document.querySelector('.leaflet-control-layers');
-                    if (!control) {{
-                        setTimeout(setupExclusiveToggle, 100);
-                        return;
-                    }}
-                    
-                    // Find checkboxes by label text (more reliable than value)
-                    var labels = control.querySelectorAll('label');
-                    var baseCheckbox = null;
-                    var imprCheckbox = null;
-                    
-                    var bothCheckbox = null;
-                    
-                    labels.forEach(function(label) {{
-                        var text = label.textContent.trim();
-                        var checkbox = label.querySelector('input[type="checkbox"]');
-                        if (!checkbox) return;
-                        
-                        if (text.includes('Baseline')) {{
-                            baseCheckbox = checkbox;
-                        }} else if (text.includes('Improved')) {{
-                            imprCheckbox = checkbox;
-                        }} else if (text.includes('Both')) {{
-                            bothCheckbox = checkbox;
-                        }}
-                    }});
-                    
-                    function makeExclusive(checkboxes) {{
-                        checkboxes.forEach(function(cb) {{
-                            if (!cb) return;
-                            cb.addEventListener('change', function() {{
-                                if (this.checked) {{
-                                    checkboxes.forEach(function(other) {{
-                                        if (other && other !== this && other.checked) {{
-                                            other.checked = false;
-                                            other.dispatchEvent(new Event('change'));
-                                        }}
-                                    }}.bind(this));
-                                }}
-                            }});
-                        }});
-                    }}
-                    
-                    var routeCheckboxes = [baseCheckbox, imprCheckbox, bothCheckbox].filter(function(cb) {{ return cb !== null; }});
-                    if (routeCheckboxes.length > 1) {{
-                        makeExclusive(routeCheckboxes);
-                    }}
-                }}
-                
-                // Wait for map to be fully loaded
-                if (document.readyState === 'loading') {{
-                    document.addEventListener('DOMContentLoaded', setupExclusiveToggle);
-                }} else {{
-                    setTimeout(setupExclusiveToggle, 300);
-                }}
-            }})();
-            </script>
-            """
-            
-            from folium import Element
-            m.get_root().html.add_child(Element(js_code))
     else:
         # Checkbox mode: allow both layers independently
         folium.LayerControl(collapsed=False).add_to(m)
@@ -700,4 +629,270 @@ def save_route_map_html(
     m.save(str(out_path))
     
     logger.info(f"Map saved to: {out_path.absolute()}")
+
+
+def _get_vehicle_color(depot_color: str, vehicle_idx: int, total_vehicles: int) -> str:
+    """
+    Get vehicle color as slight variation of depot color.
+    
+    Args:
+        depot_color: Base depot color (hex, e.g., "#FF0000")
+        vehicle_idx: Vehicle index within depot (0-based)
+        total_vehicles: Total vehicles in this depot
+    
+    Returns:
+        Hex color string
+    """
+    if total_vehicles == 1:
+        return depot_color
+    
+    # Parse RGB from hex
+    r = int(depot_color[1:3], 16)
+    g = int(depot_color[3:5], 16)
+    b = int(depot_color[5:7], 16)
+    
+    # Create variations: darker, lighter, or slightly shifted
+    variations = []
+    for i in range(total_vehicles):
+        if i == 0:
+            variations.append(depot_color)  # Base color
+        else:
+            # Alternate between darker and lighter
+            factor = 0.85 + (i % 2) * 0.15  # 0.85 (darker) or 1.0 (base) or 1.15 (lighter)
+            if i % 2 == 1:
+                factor = 0.75  # Darker variant
+            else:
+                factor = 1.15  # Lighter variant
+            
+            new_r = max(0, min(255, int(r * factor)))
+            new_g = max(0, min(255, int(g * factor)))
+            new_b = max(0, min(255, int(b * factor)))
+            variations.append(f"#{new_r:02X}{new_g:02X}{new_b:02X}")
+    
+    return variations[vehicle_idx % len(variations)]
+
+
+def save_multi_solution_map_html(
+    solutions: Dict[str, Dict[str, Any]],
+    dcs: List[Any],
+    stops_by_id: Dict[str, Dict[str, Any]],
+    out_html: str,
+    tiles: str = "OpenStreetMap"
+) -> None:
+    """
+    Generate interactive HTML map with multiple solutions (flexible number).
+    Each solution gets a radio button layer. Routes organized by depot, vehicles have color variations.
+    
+    Args:
+        solutions: Dict mapping solution name to solution dict, e.g.:
+            {"baseline": {...}, "local": {...}, "improved": {...}, "cts": {...}}
+        dcs: List of DC configs (with .id, .lat, .lon)
+        stops_by_id: Dict mapping stop ID to stop data
+        out_html: Output HTML file path
+        tiles: Map tile provider (default: "OpenStreetMap")
+    """
+    if folium is None:
+        raise ImportError("folium is required. Install with: pip install folium")
+    
+    if not solutions:
+        logger.warning("No solutions provided for map generation")
+        return
+    
+    # Collect all coordinates for centering
+    all_coords = []
+    for dc in dcs:
+        all_coords.append((dc.lat, dc.lon))
+    for stop in stops_by_id.values():
+        all_coords.append((stop["lat"], stop["lon"]))
+    
+    if not all_coords:
+        logger.warning("No coordinates found for map centering")
+        return
+    
+    # Calculate center
+    center_lat = sum(c[0] for c in all_coords) / len(all_coords)
+    center_lon = sum(c[1] for c in all_coords) / len(all_coords)
+    
+    # Create map
+    try:
+        m = folium.Map(
+            location=[center_lat, center_lon],
+            zoom_start=12,
+            tiles=tiles
+        )
+    except Exception as e:
+        logger.warning(f"Failed to create map with tiles '{tiles}': {e}, using OpenStreetMap")
+        m = folium.Map(
+            location=[center_lat, center_lon],
+            zoom_start=12,
+            tiles="OpenStreetMap"
+        )
+    
+    # Depot colors (distinct per depot)
+    depot_colors = ["#FF0000", "#0066FF", "#00CC00", "#CC00CC", "#FF6600", "#CC0000", "#0000CC", "#00AA00"]
+    depot_icon_colors = ["red", "blue", "green", "purple", "orange", "darkred", "darkblue", "darkgreen"]
+    
+    # Create data layer (stops and depots - always visible)
+    fg_data = folium.FeatureGroup(name="Data", overlay=True, show=True)
+    
+    # Add depot markers
+    for dc_idx, dc in enumerate(dcs):
+        icon_color = depot_icon_colors[dc_idx % len(depot_icon_colors)]
+        folium.Marker(
+            [dc.lat, dc.lon],
+            popup=f"DC: {dc.id}",
+            icon=folium.Icon(color=icon_color, icon="warehouse", prefix="fa")
+        ).add_to(fg_data)
+    
+    # Add stop markers
+    for stop_id, stop in stops_by_id.items():
+        if "lat" not in stop or "lon" not in stop:
+            continue
+        folium.CircleMarker(
+            [stop["lat"], stop["lon"]],
+            radius=5,
+            popup=f"Stop: {stop_id} (demand: {stop.get('demand', 'N/A')})",
+            color="#0000FF",
+            fill=True,
+            fillColor="#0000FF",
+            fillOpacity=0.8,
+            weight=2
+        ).add_to(fg_data)
+    
+    fg_data.add_to(m)
+    
+    # Create OSRM cache for geometry calculation (if needed)
+    cache = None
+    if OSRM_AVAILABLE:
+        cache = iNaviCache(approx_mode=False)
+        logger.info("OSRM cache initialized for geometry calculation")
+    
+    # Create one FeatureGroup per solution (radio buttons)
+    solution_groups = []
+    solution_names = list(solutions.keys())
+    
+    for sol_idx, (sol_name, solution) in enumerate(solutions.items()):
+        fg = folium.FeatureGroup(
+            name=sol_name.title(),
+            overlay=False,
+            control=True,
+            show=(sol_idx == 0)  # Show first solution by default
+        )
+        
+        routes_by_dc = solution.get("routes_by_dc", {})
+        
+        # Process each depot
+        for dc_idx, dc in enumerate(dcs):
+            dc_color = depot_colors[dc_idx % len(depot_colors)]
+            dc_routes = routes_by_dc.get(dc.id, [])
+            
+            # Process each vehicle route
+            for route_idx, route in enumerate(dc_routes):
+                # Get vehicle color (variation of depot color)
+                vehicle_color = _get_vehicle_color(dc_color, route_idx, len(dc_routes))
+                
+                stop_ids = route.get("ordered_stop_ids", [])
+                route_id = f"{dc.id}_{route.get('vehicle_id', f'V{route_idx}')}"
+                
+                # Recalculate geometry using OSRM if not present
+                has_geometry = bool(route.get("geometry"))
+                if not has_geometry and OSRM_AVAILABLE and cache and stop_ids:
+                    logger.info(f"  Recalculating OSRM geometry for {sol_name} {route_id} (no geometry in route)...")
+                    try:
+                        from .osrm_provider import get_osrm_leg
+                        # Build geometry by concatenating leg routes
+                        geometry_coords = []
+                        
+                        # DC -> first stop
+                        if stop_ids and stop_ids[0] in stops_by_id:
+                            first_stop = stops_by_id[stop_ids[0]]
+                            leg = get_osrm_leg(
+                                origin=(dc.lat, dc.lon),
+                                dest=(first_stop["lat"], first_stop["lon"]),
+                                cache=cache
+                            )
+                            leg_poly = leg.get("polyline", [])
+                            if leg_poly:
+                                geometry_coords.extend(leg_poly)
+                        
+                        # Stop -> stop legs
+                        for i in range(len(stop_ids) - 1):
+                            from_id = stop_ids[i]
+                            to_id = stop_ids[i + 1]
+                            if from_id in stops_by_id and to_id in stops_by_id:
+                                from_stop = stops_by_id[from_id]
+                                to_stop = stops_by_id[to_id]
+                                leg = get_osrm_leg(
+                                    origin=(from_stop["lat"], from_stop["lon"]),
+                                    dest=(to_stop["lat"], to_stop["lon"]),
+                                    cache=cache
+                                )
+                                leg_poly = leg.get("polyline", [])
+                                # Skip first point (duplicate of previous leg's last point)
+                                if leg_poly and len(leg_poly) > 1:
+                                    geometry_coords.extend(leg_poly[1:])
+                                elif leg_poly:
+                                    geometry_coords.extend(leg_poly)
+                        
+                        # Last stop -> DC
+                        if stop_ids and stop_ids[-1] in stops_by_id:
+                            last_stop = stops_by_id[stop_ids[-1]]
+                            leg = get_osrm_leg(
+                                origin=(last_stop["lat"], last_stop["lon"]),
+                                dest=(dc.lat, dc.lon),
+                                cache=cache
+                            )
+                            leg_poly = leg.get("polyline", [])
+                            if leg_poly and len(leg_poly) > 1:
+                                geometry_coords.extend(leg_poly[1:])
+                            elif leg_poly:
+                                geometry_coords.extend(leg_poly)
+                        
+                        if geometry_coords:
+                            # Store as geometry for future use
+                            route["geometry"] = geometry_coords
+                            logger.info(f"  ✓ Calculated {len(geometry_coords)} OSRM geometry points for {route_id}")
+                        else:
+                            logger.warning(f"  No geometry calculated for {route_id}")
+                    except Exception as e:
+                        logger.warning(f"  Failed to calculate geometry for {route_id}: {e}")
+                
+                # Extract coordinates using OSRM/iNavi polylines
+                coords = extract_route_coordinates(route, stops_by_id, dc)
+                
+                if coords:
+                    folium.PolyLine(
+                        coords,
+                        color=vehicle_color,
+                        weight=4,
+                        opacity=0.65,  # Reduced opacity for better visibility
+                        popup=f"{sol_name.title()} - {dc.id} - {route.get('vehicle_id', 'V?')} ({len(stop_ids)} stops)",
+                        tooltip=f"{sol_name} {dc.id} {route.get('vehicle_id', 'V?')}"
+                    ).add_to(fg)
+        
+        fg.add_to(m)
+        solution_groups.append(fg)
+    
+    # Add GroupedLayerControl for radio buttons
+    try:
+        from folium.plugins import GroupedLayerControl
+        GroupedLayerControl(
+            groups={
+                "Solutions": solution_groups,
+                "Data": [fg_data]
+            },
+            collapsed=False,
+            exclusive_groups=["Solutions"]
+        ).add_to(m)
+        logger.info(f"Created map with {len(solution_groups)} solution layers using GroupedLayerControl")
+    except (ImportError, AttributeError):
+        # Fallback to regular LayerControl
+        folium.LayerControl(collapsed=False).add_to(m)
+        logger.warning("GroupedLayerControl not available, using regular LayerControl (not exclusive)")
+    
+    # Save map
+    out_path = Path(out_html)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    m.save(str(out_path))
+    logger.info(f"Multi-solution map saved to: {out_path.absolute()}")
 

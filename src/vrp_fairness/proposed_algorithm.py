@@ -14,6 +14,26 @@ from .objectives import (
 logger = logging.getLogger(__name__)
 
 
+def get_stop_load(stop_data: Dict[str, Any]) -> int:
+    """
+    Return n_i = households / demand / meta.n_i, default 1.
+    This is the household weight used in Z1/Z3, worst_k, and capacity.
+    
+    Args:
+        stop_data: Stop data dictionary
+    
+    Returns:
+        Integer load (household count) for the stop
+    """
+    n_i = stop_data.get(
+        "households",
+        stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)),
+    )
+    if n_i is None or n_i == 0:
+        return 1
+    return int(n_i)
+
+
 def proposed_algorithm(
     depots: List[Dict[str, Any]],
     vehicles: Dict[str, List[Dict[str, Any]]],
@@ -162,10 +182,7 @@ def proposed_algorithm(
         WW = {}
         for stop_id, w_i in waiting.items():
             stop_data = stops_by_id.get(stop_id, {})
-            # Use households if available, otherwise fall back to demand (or meta.n_i), default 1
-            n_i = stop_data.get("households", stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)))
-            if n_i is None or n_i == 0:
-                n_i = 1
+            n_i = get_stop_load(stop_data)
             WW[stop_id] = n_i * w_i
         
         # Select operator pair (CTS or fixed)
@@ -543,7 +560,7 @@ def _remove_stops_worst_k(
     WW = {}
     for stop_id, w_i in waiting.items():
         stop_data = stops_by_id.get(stop_id, {})
-        n_i = stop_data.get("households", stop_data.get("meta", {}).get("n_i", 1)) or 1
+        n_i = get_stop_load(stop_data)
         WW[stop_id] = n_i * w_i
     
     # Sort by WW (descending) and take top k
@@ -718,6 +735,17 @@ def _regret_insertion_optimized(
     route_Z2_cache = {}
     total_Z2 = 0.0
     
+    # Step 2A: Compute per-route loads (for capacity enforcement)
+    route_loads: Dict[Tuple[str, int], int] = {}
+    Q = 100  # Fixed capacity per route
+    for dc_id, routes in solution.get("routes_by_dc", {}).items():
+        for route_idx, route in enumerate(routes):
+            load = 0
+            for sid in route.get("ordered_stop_ids", []):
+                stop_data = stops_by_id.get(sid, {})
+                load += get_stop_load(stop_data)
+            route_loads[(dc_id, route_idx)] = load
+    
     for dc_id, routes in solution.get("routes_by_dc", {}).items():
         depot_id = dc_id
         for route_idx, route in enumerate(routes):
@@ -780,6 +808,16 @@ def _regret_insertion_optimized(
                     positions_to_try = positions_to_try[:5]
                 
                 for pos in positions_to_try:
+                    # Step 2B: Capacity filter on candidate insertions (only when enforce_capacity=True)
+                    route_key = (dc_id, route_idx)
+                    current_load = route_loads.get(route_key, 0)
+                    stop_data_for_load = stops_by_id.get(stop_id, {})
+                    n_i = get_stop_load(stop_data_for_load)
+                    
+                    if enforce_capacity and current_load + n_i > Q:
+                        # This insertion would violate capacity; skip this candidate
+                        continue
+                    
                     # Quick Z2 check first (fast filter)
                     # Estimate Z2 change for this insertion
                     if pos == 0:
@@ -841,14 +879,24 @@ def _regret_insertion_optimized(
                         best_cost = cost
                         best_insertion = (dc_id, route_idx, pos, test_route_waiting, test_route_Z2)
         
+        # Step 2D: Behavior when no capacity-feasible insertion exists (enforce_capacity=True)
+        if not best_insertion and enforce_capacity:
+            logger.warning(f"No capacity-feasible insertion found for stop {stop_id} with Q={Q}")
+            # Leave stop unassigned - will be handled by _force_insert_all later
+        
         # Apply best insertion
         if best_insertion:
             dc_id, route_idx, pos, new_route_waiting, new_route_Z2 = best_insertion
             route = solution["routes_by_dc"][dc_id][route_idx]
             route["ordered_stop_ids"].insert(pos, stop_id)
             
-            # Update caches
+            # Step 2C: Update route_loads when best insertion is applied
             route_key = (dc_id, route_idx)
+            stop_data_for_load = stops_by_id.get(stop_id, {})
+            n_i = get_stop_load(stop_data_for_load)
+            route_loads[route_key] = route_loads.get(route_key, 0) + n_i
+            
+            # Update caches
             route_waiting_cache[route_key] = new_route_waiting
             old_route_Z2 = route_Z2_cache[route_key]
             route_Z2_cache[route_key] = new_route_Z2
@@ -1003,10 +1051,7 @@ def build_context(
     WW = {}
     for stop_id, w_i in waiting.items():
         stop_data = stops_by_id.get(stop_id, {})
-        # Use households if available, otherwise fall back to demand (or meta.n_i), default 1
-        n_i = stop_data.get("households", stop_data.get("demand", stop_data.get("meta", {}).get("n_i", 1)))
-        if n_i is None or n_i == 0:
-            n_i = 1
+        n_i = get_stop_load(stop_data)
         WW[stop_id] = n_i * w_i
     
     if WW:

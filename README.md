@@ -150,16 +150,95 @@ python -m src.vrp_fairness.run_experiment \
 
 All outputs are saved in `outputs/`:
 
+### Core Experiment Files
+
+**JSON Solutions:**
 - `baseline.json` - Baseline VROOM solution with routes
+- `local.json` - Local search solution
+- `improved.json` - ALNS improved solution
+- `proposed_debug.json` - ALNS debug information (objectives, trace, normalizers)
+- `variance_vs_mad_results.json` - Z3 Variance vs MAD comparison results
+- `solutions/seed*_alns.json` - Full solution backups
+- `best_solutions/seed*_alns_best.json` - Best solution backups
+
+**CSV Data:**
 - `baseline_metrics.csv` - Baseline metrics (waiting times, costs)
-- `improved.json` - Improved solution (if improvement algorithm ran)
 - `comparison.csv` - Baseline vs improved comparison
-- `solutions/seed{N}_n{M}_{city}_{method}.json` - Full solution JSON
-- `traces/seed{N}_n{M}_{city}_{method}.csv` - ALNS iteration trace
-- `plots/seed{N}_n{M}_{city}_routes.png` - Route visualization
-- `plots/seed{N}_n{M}_{city}_wait_hist.png` - Waiting time histogram (if time_matrix available)
-- `maps/seed{N}_n{M}_{city}_routes.html` - Interactive Folium map (if `--map` used)
-- `cache_polyline.json` - Cached OSRM polyline responses
+- `compare_scores.csv` - Z1, Z2, Z3, Z scores per method
+- `compare_metrics.csv` - Key metrics deltas vs baseline
+- `compare_wait_values.csv` - Waiting time values for plotting
+- `traces/seed*_proposed.csv` - ALNS iteration trace
+
+**Visualizations:**
+- `compare_wait_panels.png` - Waiting time comparison histogram (from `compare_waiting_and_scores.py`)
+- `cts_vs_alns_wait_panels.png` - ALNS vs CTS comparison (from `compare_cts_vs_alns.py`)
+- `maps/{run_id}_routes.html` - Interactive Folium map (if `--map` used)
+
+**Cache:**
+- `cache_polyline.json`, `cache_osrm_polyline.json` - Cached OSRM responses
+
+### Recommended Workflow
+
+**1. Run Basic Comparison Experiment:**
+```bash
+python scripts/compare_waiting_and_scores.py \
+  --gpkg data/yuseong_housing_3__point.gpkg \
+  --sample-n 50 \
+  --num-dcs 3 \
+  --demand-field A26 \
+  --eps 0.10 \
+  --iters 200
+```
+**Generates:** `baseline.json`, `local.json`, `improved.json`, `compare_*.csv`, `compare_wait_panels.png`
+
+**2. Run CTS Comparison (Optional):**
+```bash
+python scripts/compare_cts_vs_alns.py \
+  --gpkg data/yuseong_housing_3__point.gpkg \
+  --sample-n 50 \
+  --num-dcs 3 \
+  --eps 0.10 \
+  --iters 200
+```
+**Generates:** `cts_vs_alns_*.csv`, `cts_vs_alns_wait_panels.png`  
+**Reuses:** `baseline.json`, `improved.json` from step 1
+
+**3. Run Z3 Variance vs MAD Comparison (Optional):**
+```bash
+python scripts/compare_Z3_variance_vs_MAD.py \
+  --gpkg data/yuseong_housing_3__point.gpkg \
+  --sample-n 50 \
+  --num-dcs 3 \
+  --eps 0.10 \
+  --iters 200
+```
+**Generates:** `variance_vs_mad_*.json`, `compare_wait_values_z3.csv`  
+**Reuses:** Can use `--reuse` flag to reuse baseline and MAD solution from step 1
+
+**4. Generate Additional Plots and Maps:**
+```bash
+# Generate waiting plots and map from JSON files
+python scripts/utils/generate_from_json.py \
+  --baseline outputs/baseline.json \
+  --improved outputs/improved.json \
+  --local outputs/local.json
+
+# Generate weighted waiting graph from CSV files
+python scripts/utils/generate_weighted_waiting_graph.py
+```
+**Generates:** `waiting_plot.png`, `weighted_waiting_plot.png`, `map_compare.html`, `weighted_waiting_graph.png`
+
+### Script Summary
+
+| Script | Main Outputs |
+|--------|-------------|
+| `compare_waiting_and_scores.py` | Baseline/Local/ALNS comparison (CSV, PNG) |
+| `compare_cts_vs_alns.py` | ALNS vs CTS comparison (CSV, PNG) |
+| `compare_Z3_variance_vs_MAD.py` | Variance vs MAD Z3 comparison (JSON, CSV) |
+| `scripts/utils/generate_from_json.py` | Plots and maps from JSON files (PNG, HTML) |
+| `scripts/utils/generate_weighted_waiting_graph.py` | Weighted waiting graph from CSV files (PNG) |
+
+**Note:** Plot HTML generation has been removed. Only PNG plots are generated. HTML is only generated for interactive maps.
 
 ---
 
@@ -208,11 +287,20 @@ src/vrp_fairness/
 └── vroom_vrp.py           # VROOM VRP solver wrapper
 
 scripts/
-├── clean_geometry_from_json.py  # Utility: remove geometry from JSON
-├── generate_map_from_json.py    # Utility: generate map from existing JSON
-├── preview_gpkg.py             # Preview GPKG file contents
-├── setup_osrm_korea.sh          # OSRM data setup script
-└── test_proposed_on_realdata.py # Smoke test for proposed algorithm
+├── compare_waiting_and_scores.py    # Main comparison: Baseline/Local/ALNS
+├── compare_cts_vs_alns.py           # ALNS vs CTS comparison
+├── compare_Z3_variance_vs_MAD.py   # Z3 Variance vs MAD comparison
+├── setup_osrm_korea.sh              # OSRM data setup script
+└── utils/
+    ├── generate_from_json.py        # Generate plots/maps from JSON files
+    ├── generate_weighted_waiting_graph.py  # Generate weighted waiting graph from CSV
+    ├── plot_from_json.py            # Plot from baseline/improved JSON
+    ├── plotting_utils.py            # Common plotting utilities
+    ├── utils.py                     # Common utilities (load_json, etc.)
+    ├── clean_geometry_from_json.py  # Remove geometry from JSON
+    ├── fix_best_solution_from_trace.py  # Fix best solution from trace
+    ├── preview_gpkg.py              # Preview GPKG file contents
+    └── validate_*.py                # Validation scripts
 ```
 
 ---
@@ -221,76 +309,6 @@ scripts/
 
 - `VROOM_BASE_URL`: VROOM API URL (default: `http://localhost:3000/`)
 - `OSRM_ADDRESS`: OSRM routing service URL (default: `http://localhost:5001`)
-- `MCP_SERVER_COMMAND`: MCP server path for iNavi API (optional)
-- `INAVI_APPKEY`: iNavi API key (optional, for real routing)
-
----
-
-## Troubleshooting
-
-### OSRM Container Fails to Start
-
-**Check**: Does `osrm-data/korea-latest.osrm.fileIndex` exist?
-
-```bash
-ls -lh osrm-data/korea-latest.osrm*
-```
-
-If missing, run setup script:
-```bash
-./scripts/setup_osrm_korea.sh
-```
-
-### VROOM Not Responding
-
-1. **Check OSRM is healthy**:
-   ```bash
-   docker compose ps
-   curl "http://localhost:5001/route/v1/driving/127.0,36.0;127.1,36.1"
-   ```
-
-2. **Check VROOM logs**:
-   ```bash
-   docker compose logs vroom
-   # Or for native: cat vroom.log
-   ```
-
-3. **Verify port availability**:
-   ```bash
-   lsof -i :3000
-   lsof -i :5001
-   ```
-
-### Python Import Errors
-
-```bash
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Map Tiles Not Loading
-
-- Map tiles load from external CDNs (OpenStreetMap/CartoDB)
-- If offline, routes will still be visible but map background may be blank
-- Try different tile provider: `--map-tiles "OpenStreetMap"`
-
-### Time Matrix Missing (for `--method local`)
-
-The `local` method requires a full time matrix. If you see `KeyError: 'time_matrix'`:
-
-- Use `--method proposed` instead (doesn't require time matrix)
-- Or ensure time matrix is built (automatic for `local` method)
-
-### Services Already Running
-
-```bash
-# Stop Docker services
-docker compose down
-
-# Stop native services
-pkill -f "osrm-routed"
-pkill -f "vroom"
-```
 
 ---
 
@@ -415,6 +433,80 @@ This will:
 
 ---
 
-## License
+## Validation Framework
 
-[Add license information]
+The validation framework provides two complementary scripts to validate and compare ALNS (Fixed) and CTS algorithms on single-seed runs.
+
+### Validation 1: Correctness Validation
+
+Validates that both algorithms produce valid, consistent solutions:
+
+```bash
+python scripts/validate_alns_cts_correctness.py \
+  --baseline outputs/baseline.json \
+  --alns outputs/improved.json \
+  --cts outputs/cts_solution.json \
+  --eps 0.10 \
+  --alpha 0.5 \
+  --beta 0.3 \
+  --gamma 0.2
+```
+
+**Checks:**
+- All stops are assigned (no missing stops)
+- Solution structure is valid (routes_by_dc, ordered_stop_ids, etc.)
+- Objectives are computed correctly (Z1, Z2, Z3, Z)
+- Budget constraints are respected
+- Waiting times are computed for all stops
+- Both algorithms use the same baseline, stops, and depots
+
+**Outputs:**
+- `outputs/validation_correctness_report.json`: Detailed validation results
+- `outputs/validation_correctness_summary.txt`: Human-readable summary
+
+### Validation 2: Comprehensive Comparison
+
+Compares ALNS and CTS results with detailed metrics:
+
+```bash
+python scripts/validate_alns_cts_comparison.py \
+  --baseline outputs/baseline.json \
+  --alns outputs/improved.json \
+  --cts outputs/cts_solution.json \
+  --alns-debug outputs/proposed_debug.json \
+  --cts-debug outputs/cts_debug.json \
+  --alpha 0.5 \
+  --beta 0.3 \
+  --gamma 0.2
+```
+
+**Comparison Metrics:**
+- Objective values: Z, Z1, Z2, Z3 (absolute and relative to baseline)
+- Waiting time distribution: mean, median, max, p95, p99
+- Fairness metrics: weighted waiting time variance, top-10% vs overall mean
+- Route structure: number of routes, route lengths, depot utilization
+- Convergence: iteration where best solution was found
+
+**Outputs:**
+- `outputs/validation_comparison_report.json`: Detailed comparison metrics
+- `outputs/validation_comparison_summary.txt`: Human-readable summary
+- `outputs/validation_comparison_metrics.csv`: Tabular comparison
+
+**Usage Workflow:**
+
+1. Run comparison experiment:
+   ```bash
+   python scripts/compare_cts_vs_alns.py --sample-n 50 --iters 50
+   ```
+
+2. Validate correctness:
+   ```bash
+   python scripts/validate_alns_cts_correctness.py
+   ```
+
+3. Compare results:
+   ```bash
+   python scripts/validate_alns_cts_comparison.py
+   ```
+
+---
