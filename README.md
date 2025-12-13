@@ -335,7 +335,6 @@ Where:
 - **Z1*, Z2*, Z3***: Baseline values (normalization)
 
 **Constraints:**
-- Z2 ≤ (1 + ε) · Z2* (cost budget)
 - Vehicle capacity (if `--enforce-capacity`)
 
 **Operators:**
