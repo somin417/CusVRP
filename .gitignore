@@ -19,15 +19,6 @@ build/
 *.swo
 *~
 
-# Project outputs
-outputs/
-*.json
-*.csv
-!requirements.txt
-!package.json
-!tsconfig.json
-!mcp.json
-
 # OSRM data (large files)
 osrm-data/*.osm.pbf
 osrm-data/*.osrm

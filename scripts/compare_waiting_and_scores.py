@@ -5,10 +5,11 @@ proposed (ALSM/ALNS) using the same scoring logic as
 compare_Z3_variance_vs_MAD.py (Z3 = MAD).
 
 Outputs:
-  - compare_scores.csv: Z1, Z2, Z3 (MAD), Z per method
-  - compare_metrics.csv: key metrics deltas vs baseline
+  - baseline_local_alns_mad_scores.csv: Z1, Z2, Z3 (MAD), Z per method
+  - baseline_local_alns_mad_metrics.csv: key metrics deltas vs baseline
   - compare_wait_panels.png: four-panel waiting-time comparison (bars + lines)
-  - compare_wait_panels.png
+  - baseline_local_alns_mad_wait_values.csv: waiting time values for plotting
+  - baseline_local_alns_mad_wait_hist_data.csv: histogram data for plotting
 
 Notes:
   - Runs three experiments sequentially (baseline, local, proposed) using
@@ -263,6 +264,16 @@ def main():
 
     out = Path(args.output_dir)
     out.mkdir(exist_ok=True)
+    
+    # Create organized subdirectories
+    solutions_dir = out / "solutions"
+    data_dir = out / "data"
+    plots_dir = out / "plots"
+    debug_dir = out / "debug"
+    solutions_dir.mkdir(exist_ok=True)
+    data_dir.mkdir(exist_ok=True)
+    plots_dir.mkdir(exist_ok=True)
+    debug_dir.mkdir(exist_ok=True)
 
     # Common base command parts (without --num-dcs, will add --dcs after baseline)
     base_cmd = [
@@ -329,7 +340,7 @@ def main():
     subprocess.check_call(cmd_base)
 
     # Load baseline to extract DCs
-    baseline = load_json(out / "baseline.json")
+    baseline = load_json(solutions_dir / "baseline.json")
     depots = baseline.get("depots", [])
     if not depots:
         raise RuntimeError("No depots found in baseline.json")
@@ -357,7 +368,7 @@ def main():
     logger.info("Running local...")
     subprocess.check_call(cmd_local)
     # Load local solution directly from local.json (saved by run_experiment.py)
-    local = load_json(out / "local.json")
+    local = load_json(solutions_dir / "local.json")
     # Ensure local.json has stops_dict and depots from baseline (needed for scoring/plotting)
     if "stops_dict" not in local:
         local["stops_dict"] = baseline.get("stops_dict", {})
@@ -366,7 +377,7 @@ def main():
     # Update local.json with stops_dict/depots if they were missing
     if "stops_dict" not in local or "depots" not in local:
         try:
-            (out / "local.json").write_text(json.dumps(local, indent=2))
+            (solutions_dir / "local.json").write_text(json.dumps(local, indent=2))
             logger.info(f"Updated local.json with stops_dict/depots")
         except Exception as e:
             logger.warning(f"Failed to update local.json: {e}")
@@ -384,8 +395,8 @@ def main():
     logger.info("Running proposed (ALNS)...")
     subprocess.check_call(cmd_prop)
 
-    # Load proposed (improved.json overwritten by last run)
-    proposed = load_json(out / "improved.json")
+    # Load proposed (ALNS_MAD.json)
+    proposed = load_json(solutions_dir / "ALNS_MAD.json")
 
     # depots was already extracted from baseline above
 
@@ -404,17 +415,17 @@ def main():
         baseline_stops_dict=baseline_stops_dict
     )
     
-    # Try to load proposed_debug to use exact normalizers from proposed_algorithm
+    # Try to load alns_mad_debug to use exact normalizers from proposed_algorithm
     proposed_debug = None
-    debug_file = out / "proposed_debug.json"
+    debug_file = debug_dir / "alns_mad_debug.json"
     if debug_file.exists():
         try:
             proposed_debug = load_json(debug_file)
-            logger.info("Loaded proposed_debug.json for normalizers")
+            logger.info("Loaded alns_mad_debug.json for normalizers")
         except Exception as e:
-            logger.warning(f"Failed to load proposed_debug.json: {e}")
+            logger.warning(f"Failed to load alns_mad_debug.json: {e}")
     
-    # Use normalizers and objectives from proposed_debug if available (like compare_Z3_variance_vs_MAD.py)
+    # Use normalizers and objectives from alns_mad_debug if available (like compare_Z3_variance_vs_MAD.py)
     if proposed_debug and "normalizers" in proposed_debug:
         normalizers = proposed_debug["normalizers"]
         Z1_star = normalizers.get("Z1_star", base_scores["Z1"])
@@ -422,7 +433,7 @@ def main():
         Z3_star = normalizers.get("Z3_star", base_scores["Z3"])
         logger.info(f"Using normalizers from proposed_algorithm: Z1*={Z1_star:.1f}, Z2*={Z2_star:.1f}, Z3*={Z3_star:.1f}")
         
-        # Use baseline_objectives from proposed_debug for baseline scores (consistency with proposed_algorithm)
+        # Use baseline_objectives from alns_mad_debug for baseline scores (consistency with proposed_algorithm)
         baseline_objectives = proposed_debug.get("baseline_objectives", {})
         if baseline_objectives and all(k in baseline_objectives for k in ["Z1", "Z2", "Z3"]):
             Z1_baseline = baseline_objectives.get("Z1")
@@ -443,7 +454,7 @@ def main():
                 "waiting": base_scores["waiting"],  # Keep waiting times for plotting
             }
         else:
-            logger.warning("baseline_objectives not found in proposed_debug, using recomputed baseline scores")
+            logger.warning("baseline_objectives not found in alns_mad_debug, using recomputed baseline scores")
     else:
         Z1_star, Z2_star, Z3_star = base_scores["Z_star"]
         logger.info(f"Using normalizers from baseline: Z1*={Z1_star:.1f}, Z2*={Z2_star:.1f}, Z3*={Z3_star:.1f}")
@@ -456,7 +467,7 @@ def main():
         baseline_stops_dict=baseline_stops_dict
     )
     
-    # Proposed: use best_objectives from proposed_debug if available (like compare_Z3_variance_vs_MAD.py)
+    # Proposed: use best_objectives from alns_mad_debug if available (like compare_Z3_variance_vs_MAD.py)
     best_objectives = None
     if proposed_debug:
         best_objectives = proposed_debug.get("best_objectives", {})
@@ -503,7 +514,7 @@ def main():
     # Fallback: recompute if best_objectives not available
     if not (best_objectives and all(k in best_objectives for k in ["Z1", "Z2", "Z3"]) and 
             all(best_objectives.get(k) is not None for k in ["Z1", "Z2", "Z3"])):
-        logger.warning("best_objectives not found in proposed_debug, recomputing proposed scores...")
+        logger.warning("best_objectives not found in alns_mad_debug, recomputing proposed scores...")
         prop_scores = calc_scores(
             proposed, depots, args.use_distance_objective, args.use_mad, args.alpha, args.beta, args.gamma,
             Z1_star=Z1_star, Z2_star=Z2_star, Z3_star=Z3_star,
@@ -518,20 +529,20 @@ def main():
         ("ALSM (MAD)", prop_scores["Z1"], prop_scores["Z2"], prop_scores["Z3"], prop_scores["Z"]),
     ]
 
-    with open(out / "compare_scores.csv", "w", newline="") as f:
+    with open(data_dir / "baseline_local_alns_mad_scores.csv", "w", newline="") as f:
         import csv
 
         w = csv.writer(f)
         w.writerow(["method", "Z1", "Z2", "Z3_MAD", "Z"])
         w.writerows(rows)
-    logger.info(f"Saved Z-scores: {out / 'compare_scores.csv'}")
+    logger.info(f"Saved Z-scores: {data_dir / 'baseline_local_alns_mad_scores.csv'}")
     
     # Metrics comparison (similar to run_experiment.py's comparison.csv)
     baseline_metrics = baseline.get("metrics", {})
     local_metrics = local.get("metrics", {})
     proposed_metrics = proposed.get("metrics", {})
     
-    with open(out / "compare_metrics.csv", "w", newline="") as f:
+    with open(data_dir / "baseline_local_alns_mad_metrics.csv", "w", newline="") as f:
         import csv
         
         w = csv.writer(f)
@@ -553,7 +564,7 @@ def main():
                     prop_change = 0.0
                 
                 w.writerow([key, base_val, local_val, prop_val, f"{local_change:.2f}%", f"{prop_change:.2f}%"])
-    logger.info(f"Saved metrics comparison: {out / 'compare_metrics.csv'}")
+    logger.info(f"Saved metrics comparison: {data_dir / 'baseline_local_alns_mad_metrics.csv'}")
 
     # Plot waits (weighted exactly like Z1 = max_i households_i * w_i)
     def _weighted_waits(wait_dict: Dict[str, float]) -> List[float]:
@@ -585,7 +596,7 @@ def main():
     proposed_waits, proposed_wts = _raw_waits_with_weights(prop_scores["waiting"])
     
     bins, base_counts, local_counts, prop_counts = plot_wait_panels(
-        out_path=out / "compare_wait_panels.png",
+        out_path=plots_dir / "compare_wait_panels.png",
         city=args.city,
         baseline_waits=baseline_waits,
         local_waits=local_waits,
@@ -598,7 +609,7 @@ def main():
     # Maps are the only place where HTML is generated
 
     # Persist plot-ready data so plots can be regenerated from CSV
-    waits_path = out / "compare_wait_values.csv"
+    waits_path = data_dir / "baseline_local_alns_mad_wait_values.csv"
     with open(waits_path, "w", newline="") as f:
         import csv
         w = csv.writer(f)
@@ -611,7 +622,7 @@ def main():
             w.writerow(["ALSM (MAD)", v, wt])
     logger.info(f"Saved wait values for plotting: {waits_path}")
 
-    hist_path = out / "compare_wait_hist_data.csv"
+    hist_path = data_dir / "baseline_local_alns_mad_wait_hist_data.csv"
     with open(hist_path, "w", newline="") as f:
         import csv
         w = csv.writer(f)

@@ -4,8 +4,8 @@ Analyze trace CSV to find the best solution and fix the saved solution if needed
 
 This script:
 1. Reads the trace CSV to find the iteration with the best Z score
-2. Checks proposed_debug.json for best_objectives
-3. Compares with the saved improved.json to identify discrepancies
+2. Checks alns_mad_debug.json for best_objectives
+3. Compares with the saved ALNS_MAD.json to identify discrepancies
 4. Reports findings and suggests fixes
 """
 
@@ -60,7 +60,7 @@ def find_best_iteration(trace: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]
 
 
 def load_debug_json(debug_file: Path) -> Optional[Dict[str, Any]]:
-    """Load proposed_debug.json."""
+    """Load alns_mad_debug.json."""
     if not debug_file.exists():
         logger.warning(f"Debug file not found: {debug_file}")
         return None
@@ -206,10 +206,10 @@ def main():
         logger.error("No trace data loaded!")
         sys.exit(1)
     
-    debug_file = output_dir / "proposed_debug.json"
+    debug_file = output_dir / "debug" / "alns_mad_debug.json"
     debug = load_debug_json(debug_file)
     
-    solution_file = output_dir / "improved.json"
+    solution_file = output_dir / "solutions" / "ALNS_MAD.json"
     solution = load_solution_json(solution_file)
     
     baseline_file = output_dir / "baseline.json"
@@ -234,7 +234,7 @@ def main():
     
     if results["best_from_debug"]:
         best_debug = results["best_from_debug"]
-        print(f"\nBest solution from DEBUG (proposed_debug.json):")
+        print(f"\nBest solution from DEBUG (alns_mad_debug.json):")
         if "Z" in best_debug:
             print(f"  Z  = {best_debug['Z']:.6f}")
         print(f"  Z1 = {best_debug.get('Z1', 'N/A')}")
@@ -284,7 +284,7 @@ def main():
 
 2. To fix this, you would need to:
    a) Re-run the experiment (if you need the actual solution structure)
-   b) OR use the best_objectives from proposed_debug.json if they are correct
+   b) OR use the best_objectives from alns_mad_debug.json if they are correct
    c) OR check if intermediate solutions were saved
 
 3. The discrepancy suggests that best_solution was not properly maintained

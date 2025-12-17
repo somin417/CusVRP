@@ -418,20 +418,31 @@ def save_results(
     improved: Optional[Dict[str, Any]],
     config: ExperimentConfig,
     method: str = "local",
-    operator_mode: str = "fixed"
+    operator_mode: str = "fixed",
+    force: bool = False
 ) -> None:
-    """Save results to JSON and CSV files."""
+    """Save results to JSON and CSV files in organized directories."""
     output_dir = Path(config.output_dir)
     output_dir.mkdir(exist_ok=True)
     
+    # Create organized subdirectories
+    solutions_dir = output_dir / "solutions"
+    data_dir = output_dir / "data"
+    solutions_dir.mkdir(exist_ok=True)
+    data_dir.mkdir(exist_ok=True)
+    
     # Save baseline
-    baseline_file = output_dir / "baseline.json"
-    with open(baseline_file, 'w') as f:
-        json.dump(baseline, f, indent=2)
-    logger.info(f"Saved baseline to {baseline_file}")
+    baseline_file = solutions_dir / "baseline.json"
+    if baseline_file.exists() and not force:
+        logger.warning(f"Baseline file already exists: {baseline_file}")
+        logger.warning("Use --force to overwrite, or the file will be skipped")
+    else:
+        with open(baseline_file, 'w') as f:
+            json.dump(baseline, f, indent=2)
+        logger.info(f"Saved baseline to {baseline_file}")
     
     # Save baseline metrics CSV
-    metrics_file = output_dir / "baseline_metrics.csv"
+    metrics_file = data_dir / "baseline_metrics.csv"
     with open(metrics_file, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["Metric", "Value"])
@@ -441,19 +452,25 @@ def save_results(
     
     # Save improved if available
     if improved:
-        # Save local results to local.json, CTS results to cts_solution.json, other proposed to improved.json
+        # Save local results to local.json, CTS results to cts_solution.json, other proposed to ALNS_MAD.json
         if method == "local":
-            improved_file = output_dir / "local.json"
+            improved_file = solutions_dir / "local.json"
+            comparison_file = data_dir / "baseline_vs_local_comparison.csv"
         elif method == "proposed" and operator_mode == "cts":
-            improved_file = output_dir / "cts_solution.json"
+            improved_file = solutions_dir / "cts_solution.json"
+            comparison_file = data_dir / "baseline_vs_cts_comparison.csv"
         else:
-            improved_file = output_dir / "improved.json"
-        with open(improved_file, 'w') as f:
-            json.dump(improved, f, indent=2)
-        logger.info(f"Saved improved solution to {improved_file}")
+            improved_file = solutions_dir / "ALNS_MAD.json"
+            comparison_file = data_dir / "baseline_vs_alns_mad_comparison.csv"
+        if improved_file.exists() and not force:
+            logger.warning(f"Improved solution file already exists: {improved_file}")
+            logger.warning("Use --force to overwrite, or the file will be skipped")
+        else:
+            with open(improved_file, 'w') as f:
+                json.dump(improved, f, indent=2)
+            logger.info(f"Saved improved solution to {improved_file}")
         
         # Save comparison CSV
-        comparison_file = output_dir / "comparison.csv"
         with open(comparison_file, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(["Metric", "Baseline", "Improved", "Change %"])
@@ -719,6 +736,7 @@ def main():
     parser.add_argument("--enforce-capacity", action="store_true", help="Enforce capacity constraints")
     parser.add_argument("--operator-mode", type=str, default="fixed", choices=["fixed", "cts"], help="ALNS operator selection mode: fixed or cts (Contextual Thompson Sampling)")
     parser.add_argument("--use-mad", action="store_true", help="Use MAD (Mean Absolute Deviation) for Z3 instead of variance")
+    parser.add_argument("--force", action="store_true", help="Force overwrite of existing solution files")
     
     args = parser.parse_args()
     
@@ -761,8 +779,16 @@ def main():
     # Handle plots-only mode
     if args.plots_only:
         logger.info("Plots-only mode: Loading existing solutions...")
-        baseline_file = Path(args.output_dir) / "baseline.json"
-        improved_file = Path(args.output_dir) / "improved.json"
+        baseline_file = Path(args.output_dir) / "solutions" / "baseline.json"
+        if not baseline_file.exists():
+            baseline_file = Path(args.output_dir) / "baseline.json"
+        improved_file = Path(args.output_dir) / "solutions" / "ALNS_MAD.json"
+        if not improved_file.exists():
+            improved_file = Path(args.output_dir) / "solutions" / "ALNS_MAD.json"
+        if not improved_file.exists():
+            improved_file = Path(args.output_dir) / "solutions" / "improved.json"  # backward compatibility
+        if not improved_file.exists():
+            improved_file = Path(args.output_dir) / "improved.json"  # backward compatibility
         
         if not baseline_file.exists():
             logger.error(f"Baseline file not found: {baseline_file}")
@@ -1060,7 +1086,7 @@ def main():
             # CTS and ALNS both save best solutions, but with different filenames
             best_backup = debug.get("best_solution_backup")
             if best_backup:
-                backup_dir = Path(config.output_dir) / "best_solutions"
+                backup_dir = Path(config.output_dir) / "solutions"
                 backup_dir.mkdir(parents=True, exist_ok=True)
                 # Use different filenames for CTS vs ALNS to avoid conflicts
                 if args.operator_mode == "cts":
@@ -1092,20 +1118,35 @@ def main():
         tp, dp = create_osrm_providers(depots, baseline.get("stops_dict", {}), cache)
         baseline = attach_wait_and_travel(baseline, baseline.get("stops_dict", {}), tp, dp)
         if improved:
-            improved = attach_wait_and_travel(improved, baseline.get("stops_dict", {}), tp, dp)
+            # If we have best_solution_backup from debug, use its waiting times (already computed)
+            if proposed_debug and proposed_debug.get("best_solution_backup"):
+                best_backup = proposed_debug["best_solution_backup"]
+                # Use waiting times from backup if available (more accurate)
+                if best_backup.get("waiting"):
+                    improved["waiting_times"] = best_backup["waiting"]
+                    # Also attach travel times
+                    improved = attach_wait_and_travel(improved, baseline.get("stops_dict", {}), tp, dp)
+                    # Overwrite waiting_times with backup (more accurate)
+                    improved["waiting_times"] = best_backup["waiting"]
+                else:
+                    improved = attach_wait_and_travel(improved, baseline.get("stops_dict", {}), tp, dp)
+            else:
+                improved = attach_wait_and_travel(improved, baseline.get("stops_dict", {}), tp, dp)
     except Exception as e:
         logger.warning(f"Failed to attach waiting/travel times: {e}")
     
     # Save results
-    save_results(baseline, improved, config, method=args.method, operator_mode=args.operator_mode)
+    save_results(baseline, improved, config, method=args.method, operator_mode=args.operator_mode, force=args.force)
     
     # Save proposed_debug if available (for comparison scripts)
     # Use different filenames for CTS vs ALNS to avoid conflicts
     if proposed_debug is not None:
+        debug_dir = Path(config.output_dir) / "debug"
+        debug_dir.mkdir(exist_ok=True)
         if args.operator_mode == "cts":
-            debug_file = Path(config.output_dir) / "cts_debug.json"
+            debug_file = debug_dir / "cts_debug.json"
         else:
-            debug_file = Path(config.output_dir) / "proposed_debug.json"
+            debug_file = debug_dir / "alns_mad_debug.json"
         with open(debug_file, 'w') as f:
             json.dump(proposed_debug, f, indent=2)
         logger.info(f"Saved proposed debug info: {debug_file}")
@@ -1267,7 +1308,7 @@ def main():
                 solutions["Improved"] = improved
             
             # Try to load local solution if it exists
-            local_file = Path(config.output_dir) / "local.json"
+            local_file = Path(config.output_dir) / "solutions" / "local.json"
             if local_file.exists():
                 try:
                     with open(local_file, 'r') as f:

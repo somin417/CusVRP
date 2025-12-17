@@ -1,0 +1,26 @@
+{
+  "best_from_trace": {
+    "iter": 0,
+    "Z": 0.5174040213761887,
+    "Z1": 35735.99999999999,
+    "Z2": 12221.0,
+    "Z3": 198264.1514644351,
+    "accepted": true
+  },
+  "best_from_debug": {
+    "Z1": 112236.00000000001,
+    "Z2": 12220.999999999998,
+    "Z3": 648346.4356877325,
+    "Z": 0.9807258078117969
+  },
+  "saved_solution_info": {
+    "has_routes": true,
+    "num_dcs": 3,
+    "has_stops_dict": true
+  },
+  "discrepancy_found": true,
+  "recommendations": [
+    "DISCREPANCY: Trace shows best Z1=35736.0 at iter=0, but debug shows Z1=112236.0",
+    "To verify saved solution, recompute its objectives using the same providers as the experiment"
+  ]
+}

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Set, Optional
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.vrp_fairness.objectives import (
     compute_waiting_times,
@@ -320,9 +320,9 @@ def compare_alns_vs_cts(
 
 def main():
     parser = argparse.ArgumentParser(description="Validate ALNS and CTS solution correctness")
-    parser.add_argument("--baseline", type=str, default="outputs/baseline.json", help="Baseline solution JSON")
-    parser.add_argument("--alns", type=str, default="outputs/improved.json", help="ALNS solution JSON")
-    parser.add_argument("--cts", type=str, default="outputs/cts_solution.json", help="CTS solution JSON")
+    parser.add_argument("--baseline", type=str, default="outputs/solutions/baseline.json", help="Baseline solution JSON")
+    parser.add_argument("--alns", type=str, default="outputs/solutions/ALNS_MAD.json", help="ALNS solution JSON")
+    parser.add_argument("--cts", type=str, default="outputs/solutions/cts_solution.json", help="CTS solution JSON")
     parser.add_argument("--output-dir", type=str, default="outputs", help="Output directory")
     parser.add_argument("--eps", type=float, default=0.10, help="Budget constraint (eps)")
     parser.add_argument("--alpha", type=float, default=0.5, help="Z1 weight")

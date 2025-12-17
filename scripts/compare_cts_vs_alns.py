@@ -230,7 +230,7 @@ def main():
     p.add_argument("--num-dcs", type=int, default=3)
     p.add_argument("--city", default="daejeon")
     p.add_argument("--demand-field", default="A26")
-    p.add_argument("--eps", type=float, default=0.30, help="Cost budget tolerance (default: 0.30 = 130% of baseline Z2)")
+    p.add_argument("--eps", type=float, default=0.30, help="Cost budget tolerance (default: 0.30 = 130% of baseline Z2). Note: Higher than other scripts (0.10) to allow more exploration for CTS comparison.")
     p.add_argument("--iters", type=int, default=50)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--use-distance-objective", action="store_true")
@@ -244,12 +244,22 @@ def main():
 
     out = Path(args.output_dir)
     out.mkdir(exist_ok=True)
+    
+    # Create organized subdirectories
+    solutions_dir = out / "solutions"
+    data_dir = out / "data"
+    plots_dir = out / "plots"
+    debug_dir = out / "debug"
+    solutions_dir.mkdir(exist_ok=True)
+    data_dir.mkdir(exist_ok=True)
+    plots_dir.mkdir(exist_ok=True)
+    debug_dir.mkdir(exist_ok=True)
 
     # Try to reuse ALNS results from compare_waiting_and_scores.py
     # Files created by compare_waiting_and_scores.py:
     # - baseline.json: baseline solution (created by run_experiment --method baseline)
-    # - improved.json: ALNS solution (created by run_experiment --method proposed --operator-mode fixed)
-    # - proposed_debug.json: ALNS debug info (created by run_experiment when method=proposed)
+    # - ALNS_MAD.json: ALNS solution (created by run_experiment --method proposed --operator-mode fixed)
+    # - alns_mad_debug.json: ALNS debug info (created by run_experiment when method=proposed)
     baseline = None
     alns_solution = None
     alns_debug = None
@@ -259,17 +269,17 @@ def main():
         # Try to load baseline and ALNS results from compare_waiting_and_scores.py
         # Files created by compare_waiting_and_scores.py:
         # - baseline.json: baseline solution
-        # - improved.json: ALNS solution (overwritten by last run, which is ALNS)
-        # - proposed_debug.json: ALNS debug info (ONLY created when method=proposed)
+        # - ALNS_MAD.json: ALNS solution
+        # - alns_mad_debug.json: ALNS debug info (ONLY created when method=proposed)
         # - solutions/{run_id}_proposed.json: ALNS solution backup (ONLY created when method=proposed)
         
-        baseline_file = out / "baseline.json"
-        alns_debug_file = out / "proposed_debug.json"  # This file ONLY exists if ALNS was run
+        baseline_file = solutions_dir / "baseline.json"
+        alns_debug_file = debug_dir / "alns_mad_debug.json"  # This file ONLY exists if ALNS was run
         
-        # Initialize alns_solution_file (default to improved.json)
-        alns_solution_file = out / "improved.json"
+        # Initialize alns_solution_file (default to ALNS_MAD.json)
+        alns_solution_file = solutions_dir / "ALNS_MAD.json"
         
-        # Verify that proposed_debug.json exists (guarantees ALNS was run)
+                    # Verify that alns_mad_debug.json exists (guarantees ALNS was run)
         if baseline_file.exists() and alns_debug_file.exists() and alns_solution_file.exists():
             try:
                 baseline = load_json(baseline_file)
@@ -282,14 +292,14 @@ def main():
                     alns_solution = load_json(alns_solution_file)
                     
                     # Additional verification: check file modification times
-                    # proposed_debug.json should be newer than or equal to improved.json
-                    # (if using improved.json)
-                    if alns_solution_file == out / "improved.json":
+                    # alns_mad_debug.json should be newer than or equal to ALNS_MAD.json
+                    # (if using ALNS_MAD.json)
+                    if alns_solution_file == solutions_dir / "ALNS_MAD.json":
                         debug_mtime = alns_debug_file.stat().st_mtime
                         solution_mtime = alns_solution_file.stat().st_mtime
                         if solution_mtime < debug_mtime - 1:  # Allow 1 second tolerance
-                            logger.warning(f"improved.json ({solution_mtime}) is older than proposed_debug.json ({debug_mtime})")
-                            logger.warning("This suggests improved.json might contain local search results, not ALNS")
+                            logger.warning(f"ALNS_MAD.json ({solution_mtime}) is older than alns_mad_debug.json ({debug_mtime})")
+                            logger.warning("This suggests ALNS_MAD.json might contain local search results, not ALNS")
                             logger.info("Will run ALNS from scratch to be safe")
                             baseline = None
                             alns_solution = None
@@ -306,7 +316,7 @@ def main():
                         logger.info(f"  ALNS solution: {alns_solution_file}")
                         logger.info(f"  ALNS debug: {alns_debug_file}")
                 else:
-                    logger.warning("proposed_debug.json exists but doesn't contain expected ALNS data")
+                    logger.warning("alns_mad_debug.json exists but doesn't contain expected ALNS data")
                     logger.info("Will run ALNS from scratch")
                     baseline = None
                     alns_solution = None
@@ -322,7 +332,7 @@ def main():
             if not baseline_file.exists():
                 missing.append("baseline.json")
             if not alns_debug_file.exists():
-                missing.append("proposed_debug.json")
+                missing.append("alns_mad_debug.json")
             if not alns_solution_file.exists():
                 missing.append(f"{alns_solution_file.name}")
             logger.info(f"Missing files for ALNS reuse: {', '.join(missing)}")
@@ -331,7 +341,7 @@ def main():
     # If --cts-only, skip ALNS and use baseline.json only
     if args.cts_only:
         if baseline is None:
-            baseline_file = out / "baseline.json"
+            baseline_file = solutions_dir / "baseline.json"
             if not baseline_file.exists():
                 logger.error("--cts-only requires baseline.json to exist")
                 sys.exit(1)
@@ -409,7 +419,7 @@ def main():
         subprocess.check_call(cmd_base)
         
         # Load baseline to extract DCs
-        baseline = load_json(out / "baseline.json")
+        baseline = load_json(solutions_dir / "baseline.json")
         depots = baseline.get("depots", [])
         if not depots:
             raise RuntimeError("No depots found in baseline.json")
@@ -433,8 +443,8 @@ def main():
         subprocess.check_call(cmd_alns)
         
         # Load ALNS results
-        alns_solution = load_json(out / "improved.json")
-        alns_debug_file = out / "proposed_debug.json"
+        alns_solution = load_json(solutions_dir / "ALNS_MAD.json")
+        alns_debug_file = debug_dir / "alns_mad_debug.json"
         if alns_debug_file.exists():
             alns_debug = load_json(alns_debug_file)
     
@@ -494,8 +504,8 @@ def main():
     
     # Load CTS results from main output directory
     # CTS saves to cts_solution.json and cts_debug.json (separate from ALNS files)
-    cts_solution = load_json(out / "cts_solution.json")
-    cts_debug_file = out / "cts_debug.json"  # CTS now saves directly to cts_debug.json
+    cts_solution = load_json(solutions_dir / "cts_solution.json")
+    cts_debug_file = debug_dir / "cts_debug.json"  # CTS now saves directly to cts_debug.json
     cts_debug = None
     if cts_debug_file.exists():
         cts_debug = load_json(cts_debug_file)
@@ -697,12 +707,12 @@ def main():
         ("CTS", cts_scores["Z1"], cts_scores["Z2"], cts_scores["Z3"], cts_scores["Z"]),
     ]
 
-    with open(out / "cts_vs_alns_scores.csv", "w", newline="") as f:
+    with open(data_dir / "cts_vs_alns_scores.csv", "w", newline="") as f:
         import csv
         w = csv.writer(f)
         w.writerow(["method", "Z1", "Z2", "Z3_MAD", "Z"])
         w.writerows(rows)
-    logger.info(f"Saved Z-scores: {out / 'cts_vs_alns_scores.csv'}")
+    logger.info(f"Saved Z-scores: {data_dir / 'cts_vs_alns_scores.csv'}")
     
     # Plot waits (household-weighted, like compare_waiting_and_scores.py)
     # X-axis: raw waiting time, Y-axis: household-weighted frequency
@@ -722,7 +732,7 @@ def main():
     cts_waits, cts_wts = _raw_waits_with_weights(cts_scores["waiting"])
     
     bins, base_counts, alns_counts, cts_counts = plot_wait_panels(
-        out_path=out / "cts_vs_alns_wait_panels.png",
+        out_path=plots_dir / "cts_vs_alns_wait_panels.png",
         city=args.city,
         baseline_waits=baseline_waits,
         alns_waits=alns_waits,
@@ -735,7 +745,7 @@ def main():
         # Maps are the only place where HTML is generated
     
     # Persist plot-ready data (like compare_waiting_and_scores.py)
-    waits_path = out / "cts_vs_alns_wait_values.csv"
+    waits_path = data_dir / "cts_vs_alns_wait_values.csv"
     with open(waits_path, "w", newline="") as f:
         import csv
         w = csv.writer(f)
@@ -751,7 +761,7 @@ def main():
             w.writerow(["CTS", w_raw, wt])
     logger.info(f"Saved wait values for plotting: {waits_path}")
 
-    hist_path = out / "cts_vs_alns_wait_hist_data.csv"
+    hist_path = data_dir / "cts_vs_alns_wait_hist_data.csv"
     with open(hist_path, "w", newline="") as f:
         import csv
         w = csv.writer(f)

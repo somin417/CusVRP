@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import numpy as np
 
@@ -409,11 +409,11 @@ def generate_comparison_report(all_comparisons: Dict[str, Any]) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Compare ALNS and CTS solutions comprehensively")
-    parser.add_argument("--baseline", type=str, default="outputs/baseline.json", help="Baseline solution JSON")
-    parser.add_argument("--alns", type=str, default="outputs/improved.json", help="ALNS solution JSON")
-    parser.add_argument("--cts", type=str, default="outputs/cts_solution.json", help="CTS solution JSON")
-    parser.add_argument("--alns-debug", type=str, default="outputs/proposed_debug.json", help="ALNS debug JSON")
-    parser.add_argument("--cts-debug", type=str, default="outputs/cts_debug.json", help="CTS debug JSON (optional)")
+    parser.add_argument("--baseline", type=str, default="outputs/solutions/baseline.json", help="Baseline solution JSON")
+    parser.add_argument("--alns", type=str, default="outputs/solutions/ALNS_MAD.json", help="ALNS solution JSON")
+    parser.add_argument("--cts", type=str, default="outputs/solutions/cts_solution.json", help="CTS solution JSON")
+    parser.add_argument("--alns-debug", type=str, default="outputs/debug/alns_mad_debug.json", help="ALNS debug JSON")
+    parser.add_argument("--cts-debug", type=str, default="outputs/debug/cts_debug.json", help="CTS debug JSON (optional)")
     parser.add_argument("--output-dir", type=str, default="outputs", help="Output directory")
     parser.add_argument("--alpha", type=float, default=0.5, help="Z1 weight")
     parser.add_argument("--beta", type=float, default=0.3, help="Z2 weight")

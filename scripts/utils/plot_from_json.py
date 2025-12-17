@@ -228,10 +228,10 @@ def plot_baseline_vs_alns(
 
 def main():
     parser = argparse.ArgumentParser(description="Generate plots from JSON solution files")
-    parser.add_argument("--baseline", type=str, default="outputs/baseline.json",
+    parser.add_argument("--baseline", type=str, default="outputs/solutions/baseline.json",
                         help="Path to baseline.json")
-    parser.add_argument("--improved", type=str, default="outputs/improved.json",
-                        help="Path to improved.json (or proposed solution)")
+    parser.add_argument("--improved", type=str, default="outputs/solutions/ALNS_MAD.json",
+                        help="Path to ALNS_MAD.json (or improved.json for backward compatibility)")
     parser.add_argument("--output-dir", type=str, default="outputs/plots",
                         help="Output directory for plots")
     parser.add_argument("--city", type=str, default="daejeon", help="City name")

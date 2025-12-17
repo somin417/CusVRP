@@ -8,7 +8,7 @@ This script provides three main functions:
 3. Map with radio buttons: Interactive map with multiple solutions
 
 Usage:
-    python scripts/generate_from_json.py --baseline outputs/baseline.json --improved outputs/improved.json [--local outputs/local.json] [--cts outputs/cts_solution.json]
+    python scripts/generate_from_json.py --baseline outputs/solutions/baseline.json --improved outputs/solutions/ALNS_MAD.json [--local outputs/solutions/local.json] [--cts outputs/solutions/cts_solution.json]
     
 Options:
     --waiting-plot: Generate waiting time plot
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 # Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from scripts.utils.utils import load_json, extract_waiting_times_with_weights, calculate_weighted_waiting_times
 from scripts.utils.plotting_utils import plot_waiting_histogram, plot_weighted_waiting_histogram
@@ -50,7 +50,7 @@ def load_solutions(
     
     Args:
         baseline_path: Path to baseline.json (required)
-        improved_path: Optional path to improved.json
+        improved_path: Optional path to ALNS_MAD.json (or improved.json for backward compatibility)
         local_path: Optional path to local.json
         cts_path: Optional path to cts_solution.json
         solution_paths: Optional list of (name, path) tuples for additional solutions
@@ -232,7 +232,7 @@ def main():
     parser.add_argument("--baseline", type=str, required=True,
                        help="Path to baseline.json (required)")
     parser.add_argument("--improved", type=str, default=None,
-                       help="Path to improved.json (optional)")
+                       help="Path to ALNS_MAD.json or improved.json (optional)")
     parser.add_argument("--local", type=str, default=None,
                        help="Path to local.json (optional)")
     parser.add_argument("--cts", type=str, default=None,
@@ -302,9 +302,15 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
+    # Create organized subdirectories
+    plots_dir = output_dir / "plots"
+    maps_dir = output_dir / "maps"
+    plots_dir.mkdir(exist_ok=True)
+    maps_dir.mkdir(exist_ok=True)
+    
     # Generate plots and maps
     if generate_all or args.waiting_plot:
-        waiting_output = output_dir / "waiting_plot"
+        waiting_output = plots_dir / "waiting_plot"
         generate_waiting_plot(
             solutions=solutions,
             depots=depots,
@@ -314,7 +320,7 @@ def main():
         )
     
     if generate_all or args.weighted_plot:
-        weighted_output = output_dir / "weighted_waiting_plot"
+        weighted_output = plots_dir / "weighted_waiting_plot"
         generate_weighted_waiting_plot(
             solutions=solutions,
             depots=depots,
@@ -324,7 +330,7 @@ def main():
         )
     
     if generate_all or args.map:
-        map_output = output_dir / "map_compare.html"
+        map_output = maps_dir / "map_compare.html"
         generate_map(
             solutions=solutions,
             depots=depots,

@@ -117,17 +117,22 @@ def plot_waiting_histogram(
     
     # Method colors
     method_colors = {
-        "baseline": "#4C78A8",
-        "Baseline": "#4C78A8",
+        "baseline": "#808080",  # 회색
+        "Baseline": "#808080",
         "local": "#54A24B",
         "Local": "#54A24B",
+        "Improved": "#72B7B2",  # Explicit color so MAD/improved differs from Variance
         "ALSM (MAD)": "#F58518",
+        "ALNS": "#54A24B",  # 초록색
         "ALNS (fixed)": "#54A24B",
-        "CTS": "#E45756",
+        "CTS": "#E45756",  # 빨간색
         "Variance": "#F58518",
         "MAD": "#54A24B",
         "Variance-Improved": "#F58518",
         "MAD-Improved": "#54A24B",
+        "z1_focused": "#4C78A8",  # 파란색
+        "balanced": "#54A24B",    # 초록색
+        "z3_focused": "#F58518",   # 주황색
     }
     
     # Calculate histogram counts (with weights if provided)
@@ -262,15 +267,20 @@ def plot_weighted_waiting_histogram(
     
     # Method colors
     method_colors = {
-        "baseline": "#4C78A8",
-        "Baseline": "#4C78A8",
+        "baseline": "#808080",  # 회색
+        "Baseline": "#808080",
         "local": "#54A24B",
         "Local": "#54A24B",
+        "Improved": "#72B7B2",  # Explicit color so MAD/improved differs from Variance
         "ALSM (MAD)": "#F58518",
+        "ALNS": "#54A24B",  # 초록색
         "ALNS (fixed)": "#54A24B",
-        "CTS": "#E45756",
+        "CTS": "#E45756",  # 빨간색
         "Variance": "#F58518",
         "MAD": "#54A24B",
+        "z1_focused": "#4C78A8",  # 파란색
+        "balanced": "#54A24B",    # 초록색
+        "z3_focused": "#F58518",   # 주황색
     }
     
     # Calculate histogram counts

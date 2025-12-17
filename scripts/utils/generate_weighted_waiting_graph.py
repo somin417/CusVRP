@@ -303,11 +303,17 @@ def main():
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Define CSV file paths from the three scripts
+    # Create organized subdirectories
+    data_dir = output_dir / "data"
+    plots_dir = output_dir / "plots"
+    data_dir.mkdir(exist_ok=True)
+    plots_dir.mkdir(exist_ok=True)
+    
+    # Define CSV file paths from the three scripts (in data directory)
     csv_files = {
-        "compare_waiting_and_scores": output_dir / "compare_wait_values.csv",
-        "compare_cts_vs_alns": output_dir / "cts_vs_alns_wait_values.csv",
-        "compare_Z3_variance_vs_MAD": output_dir / "compare_wait_values_z3.csv",
+        "compare_waiting_and_scores": data_dir / "baseline_local_alns_mad_wait_values.csv",
+        "compare_cts_vs_alns": data_dir / "cts_vs_alns_wait_values.csv",
+        "compare_Z3_variance_vs_MAD": data_dir / "baseline_alns_variance_vs_mad_wait_values.csv",
     }
     
     # Load data from all CSV files
@@ -339,7 +345,7 @@ def main():
         sys.exit(1)
     
     # Plot histogram
-    output_path = output_dir / args.output_name
+    output_path = plots_dir / args.output_name
     bins, counts_by_method = plot_weighted_waiting_histogram(
         weighted_by_method,
         output_path,
@@ -354,7 +360,7 @@ def main():
     )
     
     # Save histogram data to CSV for later use
-    hist_data_path = output_dir / f"{args.output_name}_hist_data.csv"
+    hist_data_path = data_dir / f"{args.output_name}_hist_data.csv"
     with open(hist_data_path, 'w', newline='') as f:
         writer = csv.writer(f)
         # Header
@@ -374,7 +380,7 @@ def main():
     logger.info(f"Saved histogram data: {hist_data_path}")
     
     # Save weighted waiting time values to CSV
-    weighted_values_path = output_dir / f"{args.output_name}_values.csv"
+    weighted_values_path = data_dir / f"{args.output_name}_values.csv"
     with open(weighted_values_path, 'w', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(["method", "weighted_waiting_time"])

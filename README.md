@@ -82,6 +82,144 @@ curl -X POST http://localhost:3000/ \
 
 ---
 
+## Quick Start: Reproducing Experiments
+
+This section provides exact commands to reproduce all experiments with consistent results.
+
+### Prerequisites
+
+1. **Services Running**: Ensure OSRM and VROOM services are running (see "Start Services" above)
+2. **Data Files**: Ensure `data/yuseong_housing_3__point.gpkg` exists
+3. **Python Environment**: Activate virtual environment and install dependencies
+
+### Experiment Execution Order
+
+Experiments should be run in the following order due to dependencies:
+
+1. **Baseline, Local, and ALNS (MAD)**: `compare_waiting_and_scores.py`
+2. **ALNS (Variance) vs MAD**: `compare_Z3_variance_vs_MAD.py` (can reuse step 1 results)
+3. **CTS vs ALNS**: `compare_cts_vs_alns.py` (reuses step 1 results)
+4. **ABC Balance Models**: `run_cts_abc_balance.py` (requires baseline from step 1)
+
+### Experiment 1: Baseline, Local, and ALNS (MAD)
+
+**Purpose**: Generate baseline, local search, and ALNS (MAD) solutions.
+
+**Command**:
+```bash
+python scripts/compare_waiting_and_scores.py
+```
+
+**Default Parameters**:
+- `--seed 42`: Random seed for reproducibility
+- `--sample-n 50`: Number of stops to sample
+- `--num-dcs 3`: Number of distribution centers
+- `--iters 50`: ALNS iterations
+- `--eps 0.10`: Cost budget tolerance (10% increase allowed)
+- `--alpha 0.5`, `--beta 0.3`, `--gamma 0.2`: Objective weights
+
+**Outputs**:
+- `outputs/solutions/baseline.json`
+- `outputs/solutions/local.json`
+- `outputs/solutions/ALNS_MAD.json`
+- `outputs/plots/compare_wait_panels.png`
+- `outputs/data/baseline_local_alns_mad_*.csv`
+
+### Experiment 2: ALNS (Variance) vs MAD
+
+**Purpose**: Compare ALNS using Variance vs MAD for Z3.
+
+**Command** (with reuse):
+```bash
+python scripts/compare_Z3_variance_vs_MAD.py --reuse
+```
+
+**Command** (full run):
+```bash
+python scripts/compare_Z3_variance_vs_MAD.py
+```
+
+**Default Parameters**:
+- `--seed 42`: Random seed
+- `--sample-n 50`: Number of stops
+- `--num-dcs 3`: Number of DCs
+- `--iters 50`: ALNS iterations
+- `--eps 0.10`: Cost budget tolerance
+- `--alpha 0.5`, `--beta 0.3`, `--gamma 0.2`: Objective weights
+
+**Outputs**:
+- `outputs/solutions/ALNS_VAR.json` (only if not using `--reuse`)
+- `outputs/data/baseline_alns_variance_vs_mad_*.csv`
+
+### Experiment 3: CTS vs ALNS
+
+**Purpose**: Compare ALNS with fixed operators vs Contextual Thompson Sampling.
+
+**Command**:
+```bash
+python scripts/compare_cts_vs_alns.py
+```
+
+**Default Parameters**:
+- `--seed 42`: Random seed
+- `--sample-n 50`: Number of stops
+- `--num-dcs 3`: Number of DCs
+- `--iters 50`: ALNS iterations
+- `--eps 0.30`: Cost budget tolerance (30% increase allowed, higher than other experiments for more exploration)
+- `--alpha 0.5`, `--beta 0.3`, `--gamma 0.2`: Objective weights
+
+**Note**: This script reuses results from Experiment 1. Use `--force-rerun-alns` to regenerate ALNS results.
+
+**Outputs**:
+- `outputs/solutions/cts_solution.json`
+- `outputs/plots/cts_vs_alns_wait_panels.png`
+- `outputs/data/cts_vs_alns_*.csv`
+
+### Experiment 4: ABC Balance Models
+
+**Purpose**: Test different alpha/beta/gamma weight combinations.
+
+**Command**:
+```bash
+python scripts/run_cts_abc_balance.py
+```
+
+**Default Parameters**:
+- `--seed 42`: Random seed
+- `--sample-n 20`: Number of stops to sample
+- `--iters 20`: CTS iterations per configuration
+- `--eps 0.30`: Cost budget tolerance (30% increase allowed)
+- Configurations tested:
+  - Z1-focused: alpha=0.6, beta=0.3, gamma=0.1
+  - Balanced: alpha=0.35, beta=0.3, gamma=0.35
+  - Z3-focused: alpha=0.1, beta=0.3, gamma=0.6
+
+**Prerequisites**: Requires `outputs/solutions/baseline.json` from Experiment 1.
+
+**Outputs**:
+- `outputs/solutions/abc_balance/cts_*_best.json` (3 files)
+- `outputs/plots/abc_balance_comparison.png`
+- `outputs/data/abc_balance_summary.json`
+
+### Generating Additional Plots
+
+After running experiments, generate additional comparison plots:
+
+**Baseline, ALNS, CTS Comparison**:
+```bash
+python scripts/generate_waiting_plots_baseline_alns_cts.py
+```
+Outputs: `waiting_plot.png`, `weighted_waiting_plot.png`
+
+**ABC Balance Models Comparison**:
+```bash
+python scripts/generate_waiting_times_z.py
+python scripts/generate_weighted_waiting_z.py
+```
+Outputs: `waiting_times_z.png`, `weighted_waiting_times_z.png`
+
+---
+
 ## Running Experiments
 
 ### Basic Usage
@@ -148,34 +286,116 @@ python -m src.vrp_fairness.run_experiment \
 
 ## Output Files
 
-All outputs are saved in `outputs/`:
+All outputs are saved in `outputs/` and organized by type:
+
+### Directory Structure
+
+```
+outputs/
+├── solutions/          # All JSON solution files
+│   ├── baseline.json
+│   ├── local.json          # Local search algorithm (different from ALNS)
+│   ├── ALNS_MAD.json       # ALNS solution using MAD for Z3
+│   ├── ALNS_VAR.json       # ALNS solution using Variance for Z3
+│   └── cts_solution.json   # ALNS with CTS operator selection
+├── debug/              # All debug JSON files
+│   ├── proposed_debug.json
+│   ├── cts_debug.json
+│   └── variance_vs_mad_*.json
+├── plots/              # All PNG visualization files
+│   ├── compare_wait_panels.png
+│   ├── waiting_times_baseline_alns_cts.png
+│   ├── weighted_waiting_times_baseline_alns_cts.png
+│   ├── waiting_times_abc_balance_models.png
+│   ├── weighted_waiting_times_abc_balance_models.png
+│   ├── abc_balance_comparison.png
+│   └── cts_vs_alns_wait_panels.png
+├── data/               # All CSV data files
+│   ├── baseline_metrics.csv
+│   ├── baseline_vs_local_comparison.csv
+│   ├── baseline_vs_alns_mad_comparison.csv
+│   ├── baseline_vs_cts_comparison.csv
+│   ├── baseline_local_alns_mad_scores.csv
+│   ├── baseline_local_alns_mad_metrics.csv
+│   ├── baseline_local_alns_mad_wait_values.csv
+│   ├── baseline_local_alns_mad_wait_hist_data.csv
+│   ├── baseline_alns_variance_vs_mad_scores.csv
+│   ├── baseline_alns_variance_vs_mad_wait_values.csv
+│   ├── cts_vs_alns_scores.csv
+│   ├── cts_vs_alns_wait_values.csv
+│   ├── cts_vs_alns_wait_hist_data.csv
+│   ├── abc_balance_summary.json
+│   └── ...
+├── maps/               # HTML map files
+│   └── {run_id}_routes.html
+├── cache/              # Cache files
+│   ├── cache_polyline.json
+│   └── cache_osrm_polyline.json
+├── best_solutions/     # Best solution backups
+│   ├── abc_balance/
+│   └── seed*_*_best.json
+├── solutions/          # Full solution backups (subdirectory)
+│   └── seed*_*.json
+└── traces/             # Iteration trace CSV files
+    └── seed*_*.csv
+```
 
 ### Core Experiment Files
 
-**JSON Solutions:**
-- `baseline.json` - Baseline VROOM solution with routes
-- `local.json` - Local search solution
-- `improved.json` - ALNS improved solution
-- `proposed_debug.json` - ALNS debug information (objectives, trace, normalizers)
-- `variance_vs_mad_results.json` - Z3 Variance vs MAD comparison results
-- `solutions/seed*_alns.json` - Full solution backups
-- `best_solutions/seed*_alns_best.json` - Best solution backups
+**JSON Solutions (`outputs/solutions/`):**
+- `baseline.json` - Baseline VROOM solution with routes (generated by all experiments)
+- `local.json` - Local search solution (from `compare_waiting_and_scores.py`)
+- `ALNS_MAD.json` - ALNS improved solution using MAD for Z3 (from `compare_waiting_and_scores.py`)
+- `ALNS_VAR.json` - ALNS improved solution using Variance for Z3 (from `compare_Z3_variance_vs_MAD.py`)
+- `cts_solution.json` - CTS solution (from `compare_cts_vs_alns.py`)
+- `solutions/abc_balance/cts_z1_focused_best.json` - Z1-focused ABC balance solution
+- `solutions/abc_balance/cts_balanced_best.json` - Balanced ABC balance solution
+- `solutions/abc_balance/cts_z3_focused_best.json` - Z3-focused ABC balance solution
 
-**CSV Data:**
+**Debug Files (`outputs/debug/`):**
+- `alns_mad_debug.json` - ALNS (MAD) debug information (objectives, trace, normalizers)
+- `cts_debug.json` - CTS debug information
+- `variance_vs_mad_MAD_debug.json` - MAD experiment debug info
+- `variance_vs_mad_VARIANCE_debug.json` - Variance experiment debug info
+- `trace_analysis.json` - Trace analysis results
+
+**CSV Data (`outputs/data/`):**
 - `baseline_metrics.csv` - Baseline metrics (waiting times, costs)
-- `comparison.csv` - Baseline vs improved comparison
-- `compare_scores.csv` - Z1, Z2, Z3, Z scores per method
-- `compare_metrics.csv` - Key metrics deltas vs baseline
-- `compare_wait_values.csv` - Waiting time values for plotting
-- `traces/seed*_proposed.csv` - ALNS iteration trace
+- `baseline_vs_local_comparison.csv` - Baseline vs local search comparison
+- `baseline_vs_alns_mad_comparison.csv` - Baseline vs ALNS (MAD) comparison
+- `baseline_vs_cts_comparison.csv` - Baseline vs CTS comparison
+- `baseline_local_alns_mad_scores.csv` - Z1, Z2, Z3, Z scores per method (from `compare_waiting_and_scores.py`)
+- `baseline_local_alns_mad_metrics.csv` - Key metrics deltas vs baseline
+- `baseline_local_alns_mad_wait_values.csv` - Waiting time values for plotting
+- `baseline_local_alns_mad_wait_hist_data.csv` - Histogram data for plotting
+- `baseline_alns_variance_vs_mad_scores.csv` - Z3 variance vs MAD comparison scores
+- `baseline_alns_variance_vs_mad_wait_values.csv` - Z3 comparison waiting time values
+- `cts_vs_alns_scores.csv` - ALNS vs CTS comparison scores
+- `cts_vs_alns_wait_values.csv` - ALNS vs CTS waiting time values
+- `abc_balance_summary.json` - ABC balance experiment summary
+- `variance_vs_mad_results.json` - Z3 Variance vs MAD comparison results
+- `weighted_waiting_graph_hist_data.csv` - Weighted waiting histogram data
+- `weighted_waiting_graph_values.csv` - Weighted waiting time values
+- `traces/seed*_alns.csv` - ALNS iteration trace
+- `traces/seed*_cts.csv` - CTS iteration trace
 
-**Visualizations:**
-- `compare_wait_panels.png` - Waiting time comparison histogram (from `compare_waiting_and_scores.py`)
+**Visualizations (`outputs/plots/`):**
+- `compare_wait_panels.png` - Waiting time comparison histogram (Baseline/Local/ALNS from `compare_waiting_and_scores.py`)
+- `waiting_plot.png` - Waiting time distribution (Baseline/ALNS/CTS from `generate_waiting_plots_baseline_alns_cts.py`)
+- `weighted_waiting_plot.png` - Weighted waiting time distribution (Baseline/ALNS/CTS)
+- `waiting_times_z.png` - Waiting time distribution for ABC balance models (from `generate_waiting_times_z.py`)
+- `weighted_waiting_times_z.png` - Weighted waiting time distribution for ABC balance models (from `generate_weighted_waiting_z.py`)
+- `abc_balance_comparison.png` - Z scores comparison across ABC balance configurations (from `run_cts_abc_balance.py`)
 - `cts_vs_alns_wait_panels.png` - ALNS vs CTS comparison (from `compare_cts_vs_alns.py`)
-- `maps/{run_id}_routes.html` - Interactive Folium map (if `--map` used)
+- `weighted_waiting_graph.png` - Combined weighted waiting graph (from `generate_weighted_waiting_graph.py`)
 
-**Cache:**
+**Maps (`outputs/maps/`):**
+- `map_compare.html` - Interactive comparison map
+- `{run_id}_routes.html` - Interactive route map (if `--map` used)
+
+**Cache (`outputs/cache/`):**
 - `cache_polyline.json`, `cache_osrm_polyline.json` - Cached OSRM responses
+- `cache_inavi.json` - iNavi cache
 
 ### Recommended Workflow
 
@@ -189,7 +409,11 @@ python scripts/compare_waiting_and_scores.py \
   --eps 0.10 \
   --iters 200
 ```
-**Generates:** `baseline.json`, `local.json`, `improved.json`, `compare_*.csv`, `compare_wait_panels.png`
+**Generates:** 
+- `solutions/baseline.json`, `solutions/local.json`, `solutions/improved.json`
+- `data/compare_*.csv`
+- `plots/compare_wait_panels.png`
+- `debug/proposed_debug.json`
 
 **2. Run CTS Comparison (Optional):**
 ```bash
@@ -200,8 +424,12 @@ python scripts/compare_cts_vs_alns.py \
   --eps 0.10 \
   --iters 200
 ```
-**Generates:** `cts_vs_alns_*.csv`, `cts_vs_alns_wait_panels.png`  
-**Reuses:** `baseline.json`, `improved.json` from step 1
+**Generates:** 
+- `solutions/cts_solution.json`
+- `data/cts_vs_alns_*.csv`
+- `plots/cts_vs_alns_wait_panels.png`
+- `debug/cts_debug.json`
+**Reuses:** `solutions/baseline.json`, `solutions/improved.json` from step 1
 
 **3. Run Z3 Variance vs MAD Comparison (Optional):**
 ```bash
@@ -212,12 +440,38 @@ python scripts/compare_Z3_variance_vs_MAD.py \
   --eps 0.10 \
   --iters 200
 ```
-**Generates:** `variance_vs_mad_*.json`, `compare_wait_values_z3.csv`  
-**Reuses:** Can use `--reuse` flag to reuse baseline and MAD solution from step 1
+**Generates:** 
+- `solutions/variance_solution.json`
+- `data/variance_vs_mad_results.json`
+- `data/compare_wait_values_z3.csv`
+- `debug/variance_vs_mad_*.json`
+**Reuses:** Can use `--reuse` flag to reuse `solutions/baseline.json` and `solutions/improved.json` from step 1
 
-**4. Generate Additional Plots and Maps:**
+**4. Run ABC Balance Experiment (Optional):**
 ```bash
-# Generate waiting plots and map from JSON files
+python scripts/run_cts_abc_balance.py \
+  --baseline outputs/baseline.json \
+  --iters 20 \
+  --seed 42 \
+  --eps 0.30
+```
+**Generates:** 
+- `best_solutions/abc_balance/cts_z1_focused_best.json` (α=0.6, β=0.3, γ=0.1)
+- `best_solutions/abc_balance/cts_balanced_best.json` (α=0.35, β=0.3, γ=0.35)
+- `best_solutions/abc_balance/cts_z3_focused_best.json` (α=0.1, β=0.3, γ=0.6)
+- `plots/abc_balance_comparison.png` - Z scores comparison plot
+- `data/abc_balance_summary.json` - Summary of all configurations
+
+**5. Generate Additional Plots from Existing Solutions:**
+```bash
+# Generate waiting plots for Baseline/ALNS/CTS
+python scripts/generate_waiting_plots_baseline_alns_cts.py
+
+# Generate waiting plots for ABC balance models (requires baseline + abc_balance solutions)
+python scripts/generate_waiting_times_z.py
+python scripts/generate_weighted_waiting_z.py
+
+# Generate plots and map from JSON files (general utility)
 python scripts/utils/generate_from_json.py \
   --baseline outputs/baseline.json \
   --improved outputs/improved.json \
@@ -226,19 +480,40 @@ python scripts/utils/generate_from_json.py \
 # Generate weighted waiting graph from CSV files
 python scripts/utils/generate_weighted_waiting_graph.py
 ```
-**Generates:** `waiting_plot.png`, `weighted_waiting_plot.png`, `map_compare.html`, `weighted_waiting_graph.png`
+**Generates:** 
+- `plots/waiting_times_baseline_alns_cts.png`, `plots/weighted_waiting_times_baseline_alns_cts.png`
+- `plots/waiting_times_abc_balance_models.png`, `plots/weighted_waiting_times_abc_balance_models.png`
+- `maps/map_compare.html`, `plots/weighted_waiting_graph.png`
 
 ### Script Summary
 
-| Script | Main Outputs |
-|--------|-------------|
-| `compare_waiting_and_scores.py` | Baseline/Local/ALNS comparison (CSV, PNG) |
-| `compare_cts_vs_alns.py` | ALNS vs CTS comparison (CSV, PNG) |
-| `compare_Z3_variance_vs_MAD.py` | Variance vs MAD Z3 comparison (JSON, CSV) |
-| `scripts/utils/generate_from_json.py` | Plots and maps from JSON files (PNG, HTML) |
-| `scripts/utils/generate_weighted_waiting_graph.py` | Weighted waiting graph from CSV files (PNG) |
+| Script | Purpose | Main Outputs |
+|--------|---------|-------------|
+| `compare_waiting_and_scores.py` | Main comparison experiment | Baseline/Local/ALNS solutions, CSV scores, `compare_wait_panels.png` |
+| `compare_cts_vs_alns.py` | ALNS vs CTS comparison | CTS solution, `cts_vs_alns_*.csv`, `cts_vs_alns_wait_panels.png` |
+| `compare_Z3_variance_vs_MAD.py` | Z3 Variance vs MAD comparison | Variance solution, `variance_vs_mad_*.json`, `compare_wait_values_z3.csv` |
+| `run_cts_abc_balance.py` | ABC balance experiment | Three ABC balance solutions, `abc_balance_comparison.png`, `abc_balance_summary.json` |
+| `generate_waiting_plots_baseline_alns_cts.py` | Plot generation from solutions | `waiting_times_baseline_alns_cts.png`, `weighted_waiting_times_baseline_alns_cts.png` |
+| `generate_waiting_times_z.py` | Plot ABC balance waiting times | `waiting_times_abc_balance_models.png` |
+| `generate_weighted_waiting_z.py` | Plot ABC balance weighted waiting | `weighted_waiting_times_abc_balance_models.png` |
+| `scripts/utils/generate_from_json.py` | General plot/map utility | Plots and maps from any JSON solutions (PNG, HTML) |
+| `scripts/utils/generate_weighted_waiting_graph.py` | Weighted waiting graph | `weighted_waiting_graph.png` from CSV files |
 
 **Note:** Plot HTML generation has been removed. Only PNG plots are generated. HTML is only generated for interactive maps.
+
+### File Naming Convention
+
+**Plot Files:**
+- `*_baseline_alns_cts.png` - Comparison plots with Baseline, ALNS, and CTS methods
+- `*_abc_balance_models.png` - Plots showing ABC balance model results (z1_focused, balanced, z3_focused)
+- `compare_*.png` - Comparison plots from main experiment scripts
+- `abc_balance_comparison.png` - Z scores comparison across ABC balance configurations
+
+**Solution Files:**
+- `baseline.json` - Always the baseline VROOM solution
+- `improved.json` - ALNS solution (from `compare_waiting_and_scores.py`)
+- `cts_solution.json` - CTS solution (from `compare_cts_vs_alns.py`)
+- `best_solutions/abc_balance/*.json` - ABC balance experiment best solutions
 
 ---
 
@@ -290,9 +565,13 @@ scripts/
 ├── compare_waiting_and_scores.py    # Main comparison: Baseline/Local/ALNS
 ├── compare_cts_vs_alns.py           # ALNS vs CTS comparison
 ├── compare_Z3_variance_vs_MAD.py   # Z3 Variance vs MAD comparison
+├── run_cts_abc_balance.py           # ABC balance experiment (Z1/Z2/Z3 weight variations)
+├── generate_waiting_plots_baseline_alns_cts.py  # Generate Baseline/ALNS/CTS plots
+├── generate_waiting_times_z.py      # Generate ABC balance waiting time plots
+├── generate_weighted_waiting_z.py   # Generate ABC balance weighted waiting plots
 ├── setup_osrm_korea.sh              # OSRM data setup script
 └── utils/
-    ├── generate_from_json.py        # Generate plots/maps from JSON files
+    ├── generate_from_json.py        # Generate plots/maps from JSON files (general utility)
     ├── generate_weighted_waiting_graph.py  # Generate weighted waiting graph from CSV
     ├── plot_from_json.py            # Plot from baseline/improved JSON
     ├── plotting_utils.py            # Common plotting utilities
@@ -378,21 +657,54 @@ Use `--operator-mode cts` to enable CTS-based operator selection.
 
 ---
 
-## Quick Test
+## Quick Start for Verification
 
+To verify the code works without running full experiments:
+
+### 1. Verify Services
 ```bash
-# Run smoke test
-python scripts/test_proposed_on_realdata.py \
-  --gpkg data/yuseong_housing_3__point.gpkg \
-  --layer yuseong_housing_2__point \
-  --n 30 \
-  --alpha 0.4 \
-  --beta 0.3 \
-  --gamma 0.3 \
-  --eps 0.1 \
-  --iters 100 \
-  --seed 0
+# Test OSRM
+curl "http://localhost:5001/route/v1/driving/127.385,36.35;127.386,36.36"
+
+# Test VROOM
+curl -X POST http://localhost:3000/ \
+  -H "Content-Type: application/json" \
+  -d '{"vehicles":[{"id":1,"start":[127.385,36.35],"end":[127.385,36.35],"capacity":[100]}],"jobs":[{"id":1,"location":[127.386,36.36],"amount":[10]}]}'
 ```
+
+### 2. Verify Script Imports
+```bash
+# Test that all scripts can be imported (without running experiments)
+python -c "import sys; sys.path.insert(0, '.'); from scripts.compare_waiting_and_scores import *; print('✓ compare_waiting_and_scores.py')"
+python -c "import sys; sys.path.insert(0, '.'); from scripts.compare_cts_vs_alns import *; print('✓ compare_cts_vs_alns.py')"
+python -c "import sys; sys.path.insert(0, '.'); from scripts.run_cts_abc_balance import *; print('✓ run_cts_abc_balance.py')"
+```
+
+### 3. Regenerate Plots from Existing Solutions
+If solutions already exist in `outputs/`, you can regenerate plots:
+```bash
+# Regenerate Baseline/ALNS/CTS plots
+python scripts/generate_waiting_plots_baseline_alns_cts.py
+
+# Regenerate ABC balance plots (if abc_balance solutions exist)
+python scripts/generate_waiting_times_z.py
+python scripts/generate_weighted_waiting_z.py
+```
+
+### 4. Understanding Existing Outputs
+
+**Key Files to Check:**
+- `outputs/solutions/baseline.json` - Should exist if any experiment was run
+- `outputs/solutions/improved.json` - ALNS solution (if `compare_waiting_and_scores.py` was run)
+- `outputs/solutions/cts_solution.json` - CTS solution (if `compare_cts_vs_alns.py` was run)
+- `outputs/best_solutions/abc_balance/*.json` - ABC balance solutions (if `run_cts_abc_balance.py` was run)
+- `outputs/plots/abc_balance_comparison.png` - Visual comparison of ABC balance results
+- `outputs/plots/compare_wait_panels.png` - Main comparison plot
+
+**CSV Files for Analysis:**
+- `outputs/data/compare_scores.csv` - Z1, Z2, Z3, Z scores for all methods
+- `outputs/data/compare_metrics.csv` - Key metrics deltas vs baseline
+- `outputs/data/abc_balance_summary.json` - Summary of ABC balance experiment results
 
 ## Example Commands
 

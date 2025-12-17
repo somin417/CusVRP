@@ -296,9 +296,10 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--reuse", action="store_true", 
-                       help="Reuse outputs/baseline.json and outputs/improved.json (MAD solution) as baseline and MAD; train variance only with same configuration")
+                       help="Reuse outputs/solutions/baseline.json and outputs/solutions/ALNS_MAD.json (MAD solution) as baseline and MAD; train variance only with same configuration")
     parser.add_argument("--no-capacity", action="store_true", 
                        help="Disable capacity constraints (default: enabled)")
+    parser.add_argument("--force", action="store_true", help="Force overwrite of existing solution files")
     args = parser.parse_args()
     
     # Override capacity setting if --no-capacity is specified
@@ -345,23 +346,23 @@ def main():
     if args.reuse:
         # Reuse stored solutions and run only variance training
         print("\n" + "=" * 80)
-        print("REUSE MODE: Using existing baseline.json and improved.json (MAD solution)")
+        print("REUSE MODE: Using existing baseline.json and ALNS_MAD.json (MAD solution)")
         print("=" * 80)
         print(f"Capacity constraints: {'ENABLED' if config.get('enforce_capacity', True) else 'DISABLED'}")
         
-        baseline_path = Path("outputs") / "baseline.json"
-        mad_path = Path("outputs") / "improved.json"
+        baseline_path = Path("outputs") / "solutions" / "baseline.json"
+        mad_path = Path("outputs") / "solutions" / "ALNS_MAD.json"
         if not baseline_path.exists() or not mad_path.exists():
             raise FileNotFoundError(f"Need {baseline_path} and {mad_path} to reuse.")
 
         logger.info(f"Loading baseline from: {baseline_path}")
         baseline_solution, depots, vehicles, stops_by_depot_dict, stops_by_id = _build_from_baseline(baseline_path)
 
-        # Use improved.json as MAD solution (no need to recompute)
+        # Use ALNS_MAD.json as MAD solution (no need to recompute)
         logger.info(f"Loading MAD solution from: {mad_path}")
         mad_solution = json.loads(mad_path.read_text())
         
-        # Only compute baseline scores for comparison (MAD scores are already in improved.json)
+        # Only compute baseline scores for comparison (MAD scores are already in ALNS_MAD.json)
         cache = iNaviCache(approx_mode=False)
         time_provider, distance_provider = create_osrm_providers(depots, stops_by_id, cache)
         
@@ -388,7 +389,7 @@ def main():
                 "Z3_pct": ((Z3_b - Z3_m)/Z3_b*100) if Z3_b>0 else 0,
                 "Z_pct": ((Z_b - Z_m)/Z_b*100) if Z_b>0 else 0,
             },
-            "solution": mad_solution,  # Use improved.json directly as MAD solution
+            "solution": mad_solution,  # Use ALNS_MAD.json directly as MAD solution
             "debug_info": {
                 "baseline_solution": baseline_solution,
                 "best_objectives": {"Z1": Z1_m, "Z2": Z2_m, "Z3": Z3_m},
@@ -542,7 +543,7 @@ def main():
         )
         
         # Save MAD debug info to separate file to avoid conflicts
-        mad_debug_file = output_dir / "variance_vs_mad_MAD_debug.json"
+        mad_debug_file = debug_dir / "variance_vs_mad_MAD_debug.json"
         with open(mad_debug_file, 'w') as f:
             json.dump(results_MAD.get("debug_info", {}), f, indent=2)
         logger.info(f"Saved MAD debug info: {mad_debug_file}")
@@ -584,7 +585,7 @@ def main():
         )
     
     # Save Variance debug info to separate file to avoid conflicts
-    variance_debug_file = output_dir / "variance_vs_mad_VARIANCE_debug.json"
+    variance_debug_file = debug_dir / "variance_vs_mad_VARIANCE_debug.json"
     with open(variance_debug_file, 'w') as f:
         json.dump(results_variance.get("debug_info", {}), f, indent=2)
     logger.info(f"Saved Variance debug info: {variance_debug_file}")
@@ -633,7 +634,7 @@ def main():
     print(f"  Difference: {abs(results_variance['improvement']['Z_pct'] - results_MAD['improvement']['Z_pct']):.1f}%")
     
     # Save results
-    output_file = Path("outputs") / "variance_vs_mad_results.json"
+    output_file = data_dir / "variance_vs_mad_results.json"
     output_file.parent.mkdir(parents=True, exist_ok=True)
     
     comparison_results = {
@@ -663,49 +664,38 @@ def main():
     print("-" * 80)
     
     # Save Variance solution
-    variance_solution_file = output_dir / "variance_solution.json"
+    variance_solution_file = solutions_dir / "ALNS_VAR.json"
     variance_solution_to_save = results_variance["solution"].copy()
     # Ensure depots and stops_dict are included for consistency
     if "depots" not in variance_solution_to_save:
         variance_solution_to_save["depots"] = depots
     if "stops_dict" not in variance_solution_to_save:
         variance_solution_to_save["stops_dict"] = stops_by_id
-    with open(variance_solution_file, 'w') as f:
-        json.dump(variance_solution_to_save, f, indent=2)
-    logger.info(f"Saved Variance solution: {variance_solution_file}")
     
-    # Note: MAD solution is already in improved.json (or will be saved there), no need to duplicate
+    # Include waiting times from best_solution_backup if available (more accurate)
+    debug_info = results_variance.get("debug_info", {})
+    best_backup = debug_info.get("best_solution_backup")
+    if best_backup and best_backup.get("waiting"):
+        variance_solution_to_save["waiting_times"] = best_backup["waiting"]
+        logger.info(f"Added waiting_times from best_solution_backup (iteration {best_backup.get('iteration', 'N/A')})")
     
-    # Save best solution backups (with iteration info and metadata)
-    if results_variance["debug_info"].get("best_solution_backup"):
-        variance_backup_file = output_dir / "variance_best_backup.json"
-        backup_data = results_variance["debug_info"]["best_solution_backup"].copy()
-        # Ensure solution has depots and stops_dict
-        if "solution" in backup_data:
-            if "depots" not in backup_data["solution"]:
-                backup_data["solution"]["depots"] = depots
-            if "stops_dict" not in backup_data["solution"]:
-                backup_data["solution"]["stops_dict"] = stops_by_id
-        with open(variance_backup_file, 'w') as f:
-            json.dump(backup_data, f, indent=2)
-        logger.info(f"Saved Variance best backup: {variance_backup_file} (iter {backup_data.get('iteration', 'unknown')}, Z={backup_data.get('Z', 'unknown'):.6f})")
+    if variance_solution_file.exists() and not args.force:
+        logger.warning(f"Variance solution file already exists: {variance_solution_file}")
+        logger.warning("Use --force to overwrite, or the file will be skipped")
+    else:
+        with open(variance_solution_file, 'w') as f:
+            json.dump(variance_solution_to_save, f, indent=2)
+        logger.info(f"Saved Variance solution: {variance_solution_file}")
     
-    if results_MAD["debug_info"].get("best_solution_backup"):
-        mad_backup_file = output_dir / "mad_best_backup.json"
-        backup_data = results_MAD["debug_info"]["best_solution_backup"].copy()
-        # Ensure solution has depots and stops_dict
-        if "solution" in backup_data:
-            if "depots" not in backup_data["solution"]:
-                backup_data["solution"]["depots"] = depots
-            if "stops_dict" not in backup_data["solution"]:
-                backup_data["solution"]["stops_dict"] = stops_by_id
-        with open(mad_backup_file, 'w') as f:
-            json.dump(backup_data, f, indent=2)
-        logger.info(f"Saved MAD best backup: {mad_backup_file} (iter {backup_data.get('iteration', 'unknown')}, Z={backup_data.get('Z', 'unknown'):.6f})")
+    # Note: MAD solution is already in ALNS_MAD.json (or will be saved there), no need to duplicate
+    # Both ALNS_MAD.json and ALNS_VAR.json are from the same ALNS experiment, just different Z3 methods
+    
+    # Note: We don't save backup files - only the final solution per model
+    # ALNS_VAR.json and ALNS_MAD.json are the final solutions
     
     # Save scores to CSV (similar to compare_waiting_and_scores.py)
     import csv
-    scores_file = output_dir / "compare_scores_z3.csv"
+    scores_file = data_dir / "baseline_alns_variance_vs_mad_scores.csv"
     with open(scores_file, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(["method", "Z1", "Z2", "Z3", "Z"])
@@ -749,7 +739,7 @@ def main():
     mad_waits, mad_wts = _raw_waits_with_weights(mad_waiting)
     
     # Save wait values to CSV (similar to compare_waiting_and_scores.py)
-    waits_file = output_dir / "compare_wait_values_z3.csv"
+    waits_file = data_dir / "baseline_alns_variance_vs_mad_wait_values.csv"
     with open(waits_file, 'w', newline='') as f:
         w = csv.writer(f)
         w.writerow(["method", "waiting_time_seconds", "households"])

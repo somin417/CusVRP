@@ -1,0 +1,6 @@
+Metric,Value
+total_duration,12051
+total_distance,120780
+num_vehicles_used,4
+unassigned_stops,[]
+per_depot,"[{'total_duration': 8081, 'total_distance': 82037, 'num_vehicles_used': 2, 'unassigned_stops': [], 'depot_id': 'DC_Logen'}, {'total_duration': 668, 'total_distance': 5884, 'num_vehicles_used': 1, 'unassigned_stops': [], 'depot_id': 'DC_Hanjin'}, {'total_duration': 3302, 'total_distance': 32859, 'num_vehicles_used': 1, 'unassigned_stops': [], 'depot_id': 'DC_CJ'}]"

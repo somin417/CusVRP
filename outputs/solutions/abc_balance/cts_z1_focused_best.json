@@ -1,0 +1,220 @@
+{
+  "solution": {
+    "routes_by_dc": {
+      "DC_Logen": [
+        {
+          "vehicle_id": "V1",
+          "ordered_stop_ids": [
+            "2496",
+            "7747",
+            "3881",
+            "2865",
+            "11379",
+            "8137",
+            "3116",
+            "10281",
+            "2689",
+            "9008",
+            "10930",
+            "11993",
+            "4910",
+            "5349",
+            "8356",
+            "1722"
+          ],
+          "dc_id": "DC_Logen",
+          "depot_id": "DC_Logen"
+        }
+      ],
+      "DC_CJ": [
+        {
+          "vehicle_id": "V1",
+          "ordered_stop_ids": [
+            "1244",
+            "201",
+            "11882",
+            "451"
+          ],
+          "dc_id": "DC_CJ",
+          "depot_id": "DC_CJ"
+        }
+      ]
+    },
+    "depots": [
+      {
+        "id": "DC_Logen",
+        "lat": 36.3800587,
+        "lon": 127.3777765,
+        "name": "DC_Logen"
+      },
+      {
+        "id": "DC_Hanjin",
+        "lat": 36.3711833,
+        "lon": 127.4050933,
+        "name": "DC_Hanjin"
+      },
+      {
+        "id": "DC_CJ",
+        "lat": 36.449416,
+        "lon": 127.4070349,
+        "name": "DC_CJ"
+      }
+    ],
+    "metrics": {
+      "total_duration": 6570,
+      "total_distance": 77060,
+      "num_vehicles_used": 2,
+      "unassigned_stops": [],
+      "per_depot": [
+        {
+          "total_duration": 3649,
+          "total_distance": 46882,
+          "num_vehicles_used": 1,
+          "unassigned_stops": [],
+          "depot_id": "DC_Logen"
+        },
+        {
+          "total_duration": 2921,
+          "total_distance": 30178,
+          "num_vehicles_used": 1,
+          "unassigned_stops": [],
+          "depot_id": "DC_CJ"
+        }
+      ]
+    },
+    "stops_dict": {
+      "1722": {
+        "lat": 36.4001976755087,
+        "lon": 127.3966209407804,
+        "demand": 3,
+        "service_time": 300
+      },
+      "5349": {
+        "lat": 36.30284331493492,
+        "lon": 127.31777520828653,
+        "demand": 4,
+        "service_time": 300
+      },
+      "10281": {
+        "lat": 36.35036649789879,
+        "lon": 127.33689426811695,
+        "demand": 4,
+        "service_time": 300
+      },
+      "2496": {
+        "lat": 36.3820080544733,
+        "lon": 127.37745486129647,
+        "demand": 4,
+        "service_time": 300
+      },
+      "2689": {
+        "lat": 36.350637750781274,
+        "lon": 127.33892224921811,
+        "demand": 4,
+        "service_time": 300
+      },
+      "11993": {
+        "lat": 36.33873672779968,
+        "lon": 127.32866186363646,
+        "demand": 1,
+        "service_time": 300
+      },
+      "3881": {
+        "lat": 36.35219539351899,
+        "lon": 127.33593713400062,
+        "demand": 2,
+        "service_time": 300
+      },
+      "9008": {
+        "lat": 36.34498299008972,
+        "lon": 127.3408723608175,
+        "demand": 3,
+        "service_time": 300
+      },
+      "10930": {
+        "lat": 36.335823724972826,
+        "lon": 127.33883768849294,
+        "demand": 3,
+        "service_time": 300
+      },
+      "2865": {
+        "lat": 36.35119570297001,
+        "lon": 127.33475519822188,
+        "demand": 3,
+        "service_time": 300
+      },
+      "4910": {
+        "lat": 36.30181079126734,
+        "lon": 127.31676411549186,
+        "demand": 4,
+        "service_time": 300
+      },
+      "7747": {
+        "lat": 36.37183193387788,
+        "lon": 127.32295778479383,
+        "demand": 20,
+        "service_time": 300
+      },
+      "8356": {
+        "lat": 36.36048662734069,
+        "lon": 127.33082835944089,
+        "demand": 1,
+        "service_time": 300
+      },
+      "8137": {
+        "lat": 36.35087154741107,
+        "lon": 127.32987045410948,
+        "demand": 4,
+        "service_time": 300
+      },
+      "11379": {
+        "lat": 36.358245250374964,
+        "lon": 127.30710585401448,
+        "demand": 4,
+        "service_time": 300
+      },
+      "3116": {
+        "lat": 36.35035640125669,
+        "lon": 127.33343075604165,
+        "demand": 3,
+        "service_time": 300
+      },
+      "11882": {
+        "lat": 36.47539975591975,
+        "lon": 127.39869824537067,
+        "demand": 1,
+        "service_time": 300
+      },
+      "201": {
+        "lat": 36.492507912066934,
+        "lon": 127.38473133721281,
+        "demand": 1,
+        "service_time": 300
+      },
+      "451": {
+        "lat": 36.422074850494695,
+        "lon": 127.39432812987012,
+        "demand": 2,
+        "service_time": 300
+      },
+      "1244": {
+        "lat": 36.45212723369601,
+        "lon": 127.37052860776481,
+        "demand": 1,
+        "service_time": 300
+      }
+    }
+  },
+  "config_name": "z1_focused",
+  "alpha": 0.6,
+  "beta": 0.3,
+  "gamma": 0.1,
+  "Z": 0.5277392310403634,
+  "Z1": 25821.2,
+  "Z2": 7042.599999999999,
+  "Z3": 131607.04444444447,
+  "best_iteration": 9,
+  "iters": 20,
+  "seed": 42,
+  "eps": 0.3
+}
