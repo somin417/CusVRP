@@ -2,6 +2,13 @@
 
 Python system for solving Vehicle Routing Problems (VRP) with fairness optimization. Uses VROOM for baseline routing and ALNS for improving fairness (waiting time distribution) while respecting cost budgets.
 
+## Technical Report
+
+This repository accompanies the technical report  
+**“A Fairness-Aware Approach to the Multi-Depot Vehicle Routing Problem:  
+A Case Study of Yuseong-gu, Daejeon”**,  
+available as `IE437_CusVRP_Report.pdf`.
+
 ## Features
 
 - **Multi-Depot VRP**: Assigns stops to nearest depot using OSRM travel time, then solves per-depot VRP
